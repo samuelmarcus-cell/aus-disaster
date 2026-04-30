@@ -2394,13 +2394,27 @@ def render_drfa_merged():
     with tab_chart:
         c1, c2 = st.columns(2)
         with c1:
-            by_hazard = filt["hazard_type"].value_counts().reset_index()
-            by_hazard.columns = ["Hazard", "Activations"]
-            fig = px.bar(by_hazard, x="Hazard", y="Activations",
-                         title="Activations by Hazard Type",
-                         color="Hazard",
-                         color_discrete_sequence=px.colors.qualitative.Set2)
-            fig.update_layout(showlegend=False, xaxis_tickangle=-30)
+            _TOP_N = 15
+            by_hazard_raw = filt["hazard_type"].value_counts().reset_index()
+            by_hazard_raw.columns = ["Hazard", "Activations"]
+            top = by_hazard_raw.head(_TOP_N).copy()
+            other_sum = by_hazard_raw.iloc[_TOP_N:]["Activations"].sum()
+            if other_sum > 0:
+                top = pd.concat(
+                    [top, pd.DataFrame([{"Hazard": f"Other ({len(by_hazard_raw) - _TOP_N} types)", "Activations": other_sum}])],
+                    ignore_index=True,
+                )
+            top = top.sort_values("Activations", ascending=True)
+            fig = px.bar(
+                top, x="Activations", y="Hazard", orientation="h",
+                title=f"Activations by Hazard Type (top {_TOP_N} shown)",
+                color="Activations", color_continuous_scale="Blues",
+            )
+            fig.update_layout(
+                coloraxis_showscale=False,
+                yaxis_title=None,
+                height=max(340, len(top) * 30),
+            )
             st.plotly_chart(fig, width="stretch")
         with c2:
             paid_by_hazard = (
