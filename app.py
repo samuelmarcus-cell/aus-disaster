@@ -2593,7 +2593,7 @@ def _fragment_ica_compound():
             .reset_index(name="Compound Clusters")
         )
         all_fy = ev[["_fy"]].drop_duplicates().rename(columns={"_fy": "fy"})
-        fy_clusters = all_fy.merge(fy_clusters, on="fy", how="left").fillna(0).infer_objects(copy=False)
+        fy_clusters = all_fy.merge(fy_clusters, on="fy", how="left").fillna(0).astype({c: float for c in fy_clusters.columns if c != "fy"})
         fy_clusters["Compound Clusters"] = fy_clusters["Compound Clusters"].astype(int)
         fy_clusters = fy_clusters.sort_values("fy")
         fy_clusters["_roll5"] = fy_clusters["Compound Clusters"].rolling(5, center=True, min_periods=3).mean()
@@ -2753,7 +2753,7 @@ def _fragment_ica_compound():
             fy_compound.columns = ["fy", "has_compound"]
 
             oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
-            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).infer_objects(copy=False)
+            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).astype(bool)
             oni_merged["Season"] = oni_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -2814,7 +2814,7 @@ def _fragment_ica_compound():
             sam_fy.columns = ["fy", "mean_sam"]
 
             sam_merged = sam_fy.merge(fy_compound, on="fy", how="left")
-            sam_merged["has_compound"] = sam_merged["has_compound"].fillna(False).infer_objects(copy=False)
+            sam_merged["has_compound"] = sam_merged["has_compound"].fillna(False).astype(bool)
             sam_merged["Season"] = sam_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -2873,7 +2873,7 @@ def _fragment_ica_compound():
             iod_fy.columns = ["fy", "mean_dmi"]
 
             iod_merged = iod_fy.merge(fy_compound, on="fy", how="left")
-            iod_merged["has_compound"] = iod_merged["has_compound"].fillna(False).infer_objects(copy=False)
+            iod_merged["has_compound"] = iod_merged["has_compound"].fillna(False).astype(bool)
             iod_merged["Season"] = iod_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -3002,7 +3002,7 @@ def _fragment_drfa_compound():
             .reset_index(name="Compound Clusters")
         )
         all_fy = ev[["_fy"]].drop_duplicates().rename(columns={"_fy": "fy"})
-        fy_clusters = all_fy.merge(fy_clusters, on="fy", how="left").fillna(0).infer_objects(copy=False)
+        fy_clusters = all_fy.merge(fy_clusters, on="fy", how="left").fillna(0).astype({c: float for c in fy_clusters.columns if c != "fy"})
         fy_clusters["Compound Clusters"] = fy_clusters["Compound Clusters"].astype(int)
         fy_clusters = fy_clusters.sort_values("fy")
         fy_clusters["_roll5"] = fy_clusters["Compound Clusters"].rolling(5, center=True, min_periods=3).mean()
@@ -3229,7 +3229,7 @@ government response burden.
             oni_fy = oni.groupby("_fy")["oni"].mean().reset_index()
             oni_fy.columns = ["fy", "mean_oni"]
             oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
-            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).infer_objects(copy=False)
+            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).astype(bool)
             oni_merged["Season"] = oni_merged["has_compound"].map({
                 True: "Compound disaster season", False: "No compound disasters",
             })
@@ -5693,30 +5693,35 @@ Data sourced from the accompanying Excel spreadsheet; Aviation is inventory only
 
 
 def render_state_capability_profile():  # noqa: C901
-    """State-level disaster burden vs AFAC capability allocation."""
-    import numpy as np
+    """Per-jurisdiction DRFA activation history and AFAC capability allocation (separate views)."""
 
     st.title("State Capability Profiles")
     st.caption(
-        "Compare each jurisdiction's historical disaster burden (DRFA activations 2006–2026) "
-        "against its share of national EM capability (AFAC 2023). "
-        "Highlights where high event exposure meets below-average capability concentration."
+        "Two independent views of each jurisdiction: its DRFA activation history (2006–2026) "
+        "and its share of national EM capability (AFAC 2023). These datasets measure different "
+        "things — administrative funding activations vs static capability headcount — and are "
+        "presented separately rather than combined."
     )
 
-    with st.expander("Methodology", expanded=False):
+    with st.expander("Data sources and limitations", expanded=False):
         st.markdown("""
-**Disaster burden:** DRFA events (unique AGRN) where the jurisdiction is the primary state.
-Multi-state events are attributed to the most-represented state.
+**DRFA activation history:** Counts unique AGRN activations where the jurisdiction is the primary
+state. Multi-state events are attributed to the most-represented state.
+DRFA is a Commonwealth funding mechanism — activations reflect policy eligibility thresholds,
+not physical EM demand directly.
 
-**Capability share:** For each AFAC resource type, the state's count as a percentage of the
-national total. The per-domain figure averages those percentages across all resource types in the domain.
-A perfectly uniform distribution = 12.5% per jurisdiction.
+**AFAC capability (2023):** For each resource type, the state's count as a percentage of the
+national total. The per-domain figure averages those percentages across all resource types
+in the domain. A perfectly uniform distribution = 12.5% per jurisdiction.
+This is a single static snapshot (2023) and cannot be compared against the 20-year DRFA trend.
 
-**Deployable contribution:** Teams this state contributes to the national mutual aid pool (48-hr, AFAC 2023).
-This pool is unavailable when the state itself is in a declared event.
+**Deployable contribution:** Teams this state contributes to the national mutual aid pool
+(48-hr readiness, AFAC 2023).
 
-**Burden vs Capacity scatter:** All states plotted — x = total DRFA events, y = deployable teams contributed.
-States below the trend line contribute less mutual aid relative to their event load.
+**Why these datasets are not combined:** DRFA activations are an administrative signal
+(funding threshold, political eligibility criteria). AFAC headcounts are a 2023 static snapshot
+of declared resources. Linking them as demand vs supply would require assumptions that have
+no empirical grounding — the same reason the Capacity Stress Analysis was removed.
         """)
 
     df_afac = load_afac_capability()
@@ -5752,20 +5757,29 @@ States below the trend line contribute less mutual aid relative to their event l
     inv_pct     = float(inv_data[f"_p{sel_state}"].mean())
     pop_share   = _AUS_STATE_POP_SHARE.get(sel_state, 12.5)
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("DRFA events (2006–2026)", f"{total_ev}")
-    m2.metric("Mean capability share", f"{inv_pct:.1f}%",
-              delta=f"{inv_pct - pop_share:+.1f} pp vs pop. share ({pop_share}%)",
-              delta_color="normal")
-    m3.metric("Deployable contribution", f"{dep_sum} teams",
-              delta=f"{dep_pct:.1f}% of national pool")
+    # ── DRFA metrics ──────────────────────────────────────────────────────────
+    st.subheader("DRFA Activation History — " + state_full)
+    d1, d2, d3 = st.columns(3)
+    d1.metric("DRFA activations (2006–2026)", f"{total_ev}")
     if not drfa_state.empty:
         pk = drfa_state.groupby("year").size().idxmax()
-        m4.metric("Peak DRFA year", str(int(pk)))
+        d2.metric("Peak activation year", str(int(pk)))
+        most_common_haz = drfa_state["hazard_group"].mode().iloc[0]
+        d3.metric("Most common hazard", most_common_haz)
     else:
-        m4.metric("Peak DRFA year", "—")
+        d2.metric("Peak activation year", "—")
+        d3.metric("Most common hazard", "—")
 
-    tab1, tab2, tab3 = st.tabs(["📊 Disaster History", "🔧 Capability Allocation", "⚖️ Burden vs Capacity"])
+    # ── AFAC metrics ──────────────────────────────────────────────────────────
+    st.subheader("AFAC Capability — " + state_full + " (2023 snapshot)")
+    a1, a2 = st.columns(2)
+    a1.metric("Mean capability share", f"{inv_pct:.1f}%",
+              delta=f"{inv_pct - pop_share:+.1f} pp vs pop. share ({pop_share}%)",
+              delta_color="normal")
+    a2.metric("Deployable contribution", f"{dep_sum} teams",
+              delta=f"{dep_pct:.1f}% of national pool", delta_color="off")
+
+    tab1, tab2 = st.tabs(["📊 DRFA Activation History", "🔧 AFAC Capability Allocation"])
 
     # ── TAB 1: DRFA history ───────────────────────────────────────────────────
     with tab1:
@@ -5838,65 +5852,6 @@ States below the trend line contribute less mutual aid relative to their event l
             width="stretch", hide_index=True,
         )
 
-    # ── TAB 3: Burden vs Capacity scatter (all states) ────────────────────────
-    with tab3:
-        st.subheader("All jurisdictions: disaster burden vs deployable capacity")
-        st.caption(
-            "x = total DRFA events (2006–2026) | y = deployable teams in national pool. "
-            "States below the trend line contribute less mutual aid relative to their event burden."
-        )
-
-        state_rows = []
-        for s in STATES:
-            s_full   = FULL[s]
-            ev_count = int((df_drfa["state_primary"] == s_full).sum())
-            dep_ct   = int(dep_data[s].sum())
-            state_rows.append({"state": s, "events": ev_count, "deployable_teams": dep_ct})
-        state_df = pd.DataFrame(state_rows)
-
-        if len(state_df) > 2:
-            coef   = np.polyfit(state_df["events"], state_df["deployable_teams"], 1)
-            x_line = np.linspace(state_df["events"].min(), state_df["events"].max(), 50)
-            y_line = np.polyval(coef, x_line)
-        else:
-            x_line = y_line = []
-
-        fig_sc = px.scatter(
-            state_df, x="events", y="deployable_teams", text="state",
-            title="All states: DRFA event burden vs deployable team contribution",
-            labels={"events": "DRFA events (2006–2026)", "deployable_teams": "Deployable teams (national pool)"},
-            color="state",
-            color_discrete_sequence=px.colors.qualitative.Set1,
-        )
-        fig_sc.update_traces(textposition="top center", marker_size=10)
-        if len(x_line):
-            fig_sc.add_scatter(
-                x=x_line, y=y_line, mode="lines",
-                line=dict(dash="dash", color="grey"),
-                name="Trend", showlegend=True,
-            )
-        fig_sc.add_scatter(
-            x=state_df.loc[state_df["state"] == sel_state, "events"],
-            y=state_df.loc[state_df["state"] == sel_state, "deployable_teams"],
-            mode="markers", marker=dict(size=18, color="black", symbol="star"),
-            name=f"{sel_state} (selected)", showlegend=True,
-        )
-        st.plotly_chart(fig_sc, width="stretch")
-
-        state_df_disp = state_df.sort_values("events", ascending=False).copy()
-        state_df_disp["events_rank"] = range(1, len(state_df_disp) + 1)
-        state_df_disp["teams_rank"]  = state_df_disp["deployable_teams"].rank(ascending=False).astype(int)
-        st.dataframe(
-            state_df_disp.rename(columns={
-                "state": "State", "events": "DRFA events",
-                "deployable_teams": "Deployable teams",
-                "events_rank": "Events rank (1=most)", "teams_rank": "Teams rank (1=most)",
-            })[["State", "DRFA events", "Events rank (1=most)", "Deployable teams", "Teams rank (1=most)"]],
-            width="stretch", hide_index=True,
-        )
-        st.caption(
-            "High events rank + low teams rank = high dependency on external support from other states."
-        )
 
 
 
