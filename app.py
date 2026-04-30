@@ -2890,14 +2890,14 @@ def _fragment_ica_compound():
         st.markdown("""
 | CDMS | # Component Events | Loss threshold per component event (NL) |
 |:---:|:---:|:---|
-| **I** | 2–3 | ≥ A\$100M each |
-| **II** | > 3 | ≥ A\$100M each |
-| **III** | 2 | ≥ A\$1B each |
-| **IV** | > 2 | ≥ A\$1B each |
-| **V** | 2 | ≥ A\$5B each |
-| **VI** | > 2 | ≥ A\$5B each |
-| **VII** | 2 | ≥ A\$20B each |
-| **VIII** | > 2 | ≥ A\$20B each |
+| **I** | 2–3 | ≥ A\\$100M each |
+| **II** | > 3 | ≥ A\\$100M each |
+| **III** | 2 | ≥ A\\$1B each |
+| **IV** | > 2 | ≥ A\\$1B each |
+| **V** | 2 | ≥ A\\$5B each |
+| **VI** | > 2 | ≥ A\\$5B each |
+| **VII** | 2 | ≥ A\\$20B each |
+| **VIII** | > 2 | ≥ A\\$20B each |
         """)
 
         compound_cl = cl[cl["_is_compound"] & cl["_magnitude"].notna()].copy()
@@ -3829,8 +3829,8 @@ represent escalating levels of external assistance.
 | Dataset | Key figures |
 |---|---|
 | DRFA Activations | 5,967 LGA-event rows · **809 unique events** · 2006–2026 |
-| DRFA Payments | **A\$6.95 B paid** · A\$6.96 B granted · only 44 of 809 events have published payment records |
-| ICA Catastrophes | **744 events** · A\$168.9 B normalised loss (2022 AUD) · 27 pre-2000 2-digit year artefacts corrected |
+| DRFA Payments | **A\\$6.95 B paid** · A\\$6.96 B granted · only 44 of 809 events have published payment records |
+| ICA Catastrophes | **744 events** · A\\$168.9 B normalised loss (2022 AUD) · 27 pre-2000 2-digit year artefacts corrected |
 | AGD Events | **673 events** · 317,945 deaths (includes 29 non-Australian events: shipwrecks, pandemics, wars) |
 | EM-DAT | **224 events** · 2,263 deaths · different inclusion scope to AGD |
 
