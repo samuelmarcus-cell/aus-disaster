@@ -938,15 +938,30 @@ def load_climate_fy_phases() -> pd.DataFrame:
         fy_df["sam_mean"] = float("nan")
         fy_df["sam_phase"] = None
 
-    # IOD: May–Nov active-season mean (require ≥ 4 months)
+    # IOD: sustained-event classification over May–Nov active season.
+    # A FY is classified as Positive/Negative IOD if ≥ 3 of the 7 active-season months
+    # exceed ±0.4 °C (BoM threshold). Averaging DMI over the season dilutes short events
+    # to near-zero and produces near-universal Neutral classification — this approach
+    # captures sustained episodes instead.
     if iod is not None:
-        iod_act = iod[iod["month"].isin([5, 6, 7, 8, 9, 10, 11])]
-        iod_fy = iod_act.groupby("fy")["dmi"].agg(dmi_mean="mean", _n="count").reset_index()
+        iod_act = iod[iod["month"].isin([5, 6, 7, 8, 9, 10, 11])].copy()
+        iod_act["is_pos"] = (iod_act["dmi"] >=  0.4).astype(int)
+        iod_act["is_neg"] = (iod_act["dmi"] <= -0.4).astype(int)
+        iod_fy = iod_act.groupby("fy").agg(
+            dmi_mean=("dmi",    "mean"),
+            pos_months=("is_pos", "sum"),
+            neg_months=("is_neg", "sum"),
+            _n=("dmi",    "count"),
+        ).reset_index()
         iod_fy.loc[iod_fy["_n"] < 4, "dmi_mean"] = float("nan")
         iod_fy["iod_phase"] = "Neutral"
-        iod_fy.loc[iod_fy["dmi_mean"] >=  0.4, "iod_phase"] = "Positive IOD"
-        iod_fy.loc[iod_fy["dmi_mean"] <= -0.4, "iod_phase"] = "Negative IOD"
-        iod_fy.drop(columns="_n", inplace=True)
+        iod_fy.loc[iod_fy["pos_months"] >= 3, "iod_phase"] = "Positive IOD"
+        iod_fy.loc[iod_fy["neg_months"] >= 3, "iod_phase"] = "Negative IOD"
+        # Resolve the rare conflict where both thresholds are met: dominant phase wins
+        conflict = (iod_fy["pos_months"] >= 3) & (iod_fy["neg_months"] >= 3)
+        iod_fy.loc[conflict & (iod_fy["pos_months"] >= iod_fy["neg_months"]), "iod_phase"] = "Positive IOD"
+        iod_fy.loc[conflict & (iod_fy["neg_months"] >  iod_fy["pos_months"]), "iod_phase"] = "Negative IOD"
+        iod_fy = iod_fy[["fy", "dmi_mean", "iod_phase"]]
         fy_df = fy_df.merge(iod_fy, on="fy", how="left")
     else:
         fy_df["dmi_mean"] = float("nan")
@@ -6309,7 +6324,7 @@ def render_climate_linkage():  # noqa: C901
         "with ENSO, SAM, and IOD phases. ICA dataset, FY1967–present."
     )
 
-    with st.expander("Methodology", expanded=False):
+    with st.expander("Methodology & limitations", expanded=False):
         st.markdown("""
 **Financial year (FY):** 1 July – 30 June. FY label = start year (FY2000 = Jul 2000 – Jun 2001).
 
@@ -6321,15 +6336,29 @@ finds ≥ 1 cluster of ≥ 2 ICA events above A\\$100M normalised loss within a 
 |---|---|---|---|
 | ENSO / ONI | El Niño (FY mean ONI ≥ +0.5 °C) | La Niña (≤ −0.5 °C) | otherwise |
 | SAM / AAO | Positive SAM (FY mean ≥ +1.0) | Negative SAM (≤ −1.0) | otherwise |
-| IOD / DMI | Positive IOD (May–Nov mean DMI ≥ +0.4 °C) | Negative IOD (≤ −0.4 °C) | otherwise |
+| IOD / DMI | Positive IOD (≥ 3 of 7 active-season months with DMI ≥ +0.4 °C) | Negative IOD (≥ 3 months ≤ −0.4 °C) | otherwise |
+
+IOD uses a sustained-event criterion (≥ 3 months above BoM's ±0.4 °C threshold during the
+May–November active season) rather than a seasonal mean. Averaging DMI over the full season
+dilutes short events to near-zero and produces near-universal Neutral classification.
 
 **Statistical tests:** Chi-squared test of independence (3-phase × 2, df = 2) followed by
-pairwise Fisher's exact tests (each phase vs all others). Requires scipy; raw counts and
-conditional probabilities are shown without p-values if scipy is unavailable.
+pairwise Fisher's exact tests (each phase vs all others). Requires scipy.
 
-**"Adverse drivers":** La Niña (floods/cyclones), Negative SAM (east-coast storms), and
-Positive IOD (drought/fire) each independently elevate compound disaster risk.
-A FY with all three simultaneously active is a "loaded dice" scenario.
+**⚠️ Important limitations — read before interpreting results:**
+- **These are exploratory associations, not causal claims.** A statistically significant
+  association between climate phase and compound season frequency does not establish causation.
+- **ENSO and IOD are not independent.** La Niña tends to co-occur with negative IOD (wet
+  conditions); El Niño tends to co-occur with positive IOD (drought/fire). Treating them as
+  independent predictors is not supported by the climate literature.
+- **Direction of influence is hazard-specific.** La Niña elevates flood/cyclone risk but
+  reduces fire risk. Positive IOD elevates fire and drought risk but reduces flood risk.
+  No single climate phase is uniformly "adverse" across all disaster types.
+- **ICA covers insured losses only.** High insurance penetration in urban NSW/VIC
+  systematically inflates ICA footprints relative to rural events, biasing the climate
+  signal toward storm/hail perils.
+- **Sample size is modest.** With ~58 financial years, individual cells in the contingency
+  tables may have counts < 5, at which point chi-squared assumptions are strained.
         """)
 
     # ── Load data ─────────────────────────────────────────────────────────────
@@ -6384,7 +6413,7 @@ A FY with all three simultaneously active is a "loaded dice" scenario.
     m4.metric("ICA coverage", f"FY{ica_fy_min}–FY{ica_fy_max}")
 
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Contingency Tables", "📈 Timeline", "🎲 Loaded Dice", "📋 Data Table",
+        "📊 Contingency Tables", "📈 Timeline", "🔀 Phase Co-occurrence", "📋 Data Table",
     ])
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -6463,8 +6492,10 @@ A FY with all three simultaneously active is a "loaded dice" scenario.
              "Negative SAM intensifies mid-latitude storm tracks and east-coast rainfall. "
              "Positive SAM is associated with drier, warmer conditions."),
             ("IOD / DMI",   "iod_phase",  ["Positive IOD", "Neutral", "Negative IOD"],
-             "Positive IOD suppresses Australian rainfall and drives drought and fire risk. "
-             "Negative IOD increases rainfall. Classified on the May–Nov active-season mean DMI."),
+             "Positive IOD suppresses Australian rainfall and elevates drought and fire risk. "
+             "Negative IOD is associated with increased rainfall. Note: ENSO and IOD are not "
+             "independent — La Niña tends to co-occur with negative IOD. "
+             "Classified by sustained-event criterion: ≥ 3 of 7 May–Nov active-season months above ±0.4 °C."),
         ]
 
         for idx_label, phase_col, phases, note in index_specs:
@@ -6599,84 +6630,64 @@ A FY with all three simultaneously active is a "loaded dice" scenario.
         )
         st.plotly_chart(fig_tl, width="stretch")
 
-    # ── TAB 3: LOADED DICE ────────────────────────────────────────────────────
+    # ── TAB 3: PHASE CO-OCCURRENCE ────────────────────────────────────────────
     with tab3:
-        st.subheader("Loaded Dice — Simultaneous Adverse Climate Drivers")
-        st.markdown("""
-Three climate drivers are each independently associated with elevated compound disaster risk:
-
-- **La Niña** — elevated rainfall, flood and cyclone activity over eastern Australia
-- **Negative SAM** — intensified mid-latitude storm tracks and east-coast rainfall
-- **Positive IOD** — drought and heat stress, elevated bushfire compound risk
-
-When two or three coincide, the probability of a compound season should increase markedly.
-The chart below shows compound season frequency as a function of how many adverse drivers
-were simultaneously active in each financial year.
-        """)
+        st.subheader("Climate Phase Co-occurrence — Descriptive Summary")
+        st.caption(
+            "Counts of financial years where each pair of climate phases was simultaneously active. "
+            "This is purely descriptive — it illustrates the known ENSO–IOD teleconnection "
+            "(La Niña tends to co-occur with Negative IOD) and should inform how the "
+            "contingency table results in Tab 1 are interpreted."
+        )
+        st.info(
+            "**Note on interpretation:** ENSO and IOD are physically coupled. La Niña years "
+            "tend to produce negative IOD conditions (wet Indian Ocean dipole), while El Niño "
+            "years tend to co-occur with positive IOD. Treating these as independent predictors "
+            "of compound disaster risk is not supported by the climate literature.",
+            icon="⚠️",
+        )
 
         valid = fy_df[fy_df[["enso_phase", "sam_phase", "iod_phase"]].notna().all(axis=1)].copy()
         if valid.empty:
-            st.info("Insufficient data for multi-index analysis (requires ONI, SAM, and IOD).")
+            st.info("Insufficient data (requires ONI, SAM, and IOD for all FYs).")
         else:
-            loaded = (
-                valid.groupby("n_adverse")
-                .agg(total=("is_compound", "count"), compound=("is_compound", "sum"))
-                .reset_index()
-            )
-            loaded["P(compound)"] = loaded["compound"] / loaded["total"]
-            loaded["label"] = loaded["n_adverse"].map({
-                0: "0 — No adverse drivers",
-                1: "1 — Single driver",
-                2: "2 — Two drivers",
-                3: "3 — All three",
-            })
+            # Cross-tabulation: ENSO × IOD
+            st.markdown("#### ENSO × IOD phase co-occurrence (count of FYs)")
+            enso_iod = pd.crosstab(valid["enso_phase"], valid["iod_phase"])
+            st.dataframe(enso_iod, width="stretch")
 
-            fig_ld = px.bar(
-                loaded, x="label", y="P(compound)",
-                text=loaded.apply(
-                    lambda r: f"{r['P(compound)']:.0%}  ({int(r['compound'])}/{int(r['total'])} FYs)",
-                    axis=1,
+            # Cross-tabulation: ENSO × SAM
+            st.markdown("#### ENSO × SAM phase co-occurrence (count of FYs)")
+            enso_sam = pd.crosstab(valid["enso_phase"], valid["sam_phase"])
+            st.dataframe(enso_sam, width="stretch")
+
+            # Full per-FY phase table for compound vs non-compound seasons
+            st.markdown("#### All-index phase summary for compound seasons only")
+            comp_only = valid[valid["is_compound"]][["fy", "enso_phase", "sam_phase", "iod_phase"]].copy()
+            comp_only["FY"] = "FY" + comp_only["fy"].astype(str)
+            st.dataframe(
+                comp_only[["FY", "enso_phase", "sam_phase", "iod_phase"]].rename(
+                    columns={"enso_phase": "ENSO", "sam_phase": "SAM", "iod_phase": "IOD"}
                 ),
-                title="Compound Season Rate by Number of Simultaneous Adverse Climate Drivers",
-                labels={"label": "Adverse drivers active simultaneously", "P(compound)": "P(compound season)"},
-                color="n_adverse",
-                color_continuous_scale=["#aec7e8", "#ff7f0e", "#d62728", "#7b0000"],
+                hide_index=True, width="stretch",
             )
-            fig_ld.add_hline(
-                y=base_rate, line_dash="dash", line_color="black",
-                annotation_text=f"Overall base rate {base_rate:.0%}",
-                annotation_position="top right",
-            )
-            fig_ld.update_traces(textposition="outside")
-            fig_ld.update_layout(
-                yaxis=dict(title="P(compound season)", tickformat=".0%", range=[0, 1.15]),
-                coloraxis_showscale=False, height=380,
-            )
-            st.plotly_chart(fig_ld, width="stretch")
-
-            # Table of "loaded" FYs (≥2 adverse drivers)
-            loaded_fys = valid[valid["n_adverse"] >= 2].sort_values("fy")
-            if not loaded_fys.empty:
-                st.markdown("**Financial years with ≥ 2 simultaneous adverse drivers:**")
-                tbl = loaded_fys[["fy", "n_adverse", "enso_phase", "sam_phase", "iod_phase", "is_compound"]].copy()
-                tbl.columns = ["FY", "Adverse drivers", "ENSO", "SAM", "IOD", "Compound season?"]
-                tbl["FY"] = "FY" + tbl["FY"].astype(str)
-                tbl["Compound season?"] = tbl["Compound season?"].map({True: "Yes ★", False: "No"})
-                st.dataframe(tbl, hide_index=True, width="stretch")
 
     # ── TAB 4: DATA TABLE ─────────────────────────────────────────────────────
     with tab4:
         st.subheader("Per-Financial-Year Climate and Compound Season Data")
         tbl = fy_df[["fy", "is_compound", "oni_mean", "enso_phase",
-                     "sam_mean", "sam_phase", "dmi_mean", "iod_phase", "n_adverse"]].copy()
+                     "sam_mean", "sam_phase", "dmi_mean", "iod_phase"]].copy()
         tbl.columns = ["FY", "Compound?", "ONI mean", "ENSO phase",
-                       "SAM mean", "SAM phase", "DMI mean (May–Nov)", "IOD phase", "Adverse drivers"]
+                       "SAM mean", "SAM phase", "DMI mean (May–Nov)", "IOD phase"]
         tbl["FY"] = "FY" + tbl["FY"].astype(str)
         tbl["Compound?"] = tbl["Compound?"].map({True: "Yes ★", False: "No"})
         for col in ["ONI mean", "SAM mean", "DMI mean (May–Nov)"]:
             tbl[col] = tbl[col].round(3)
         st.dataframe(tbl, hide_index=True, width="stretch")
-        download_button(fy_df, "climate–compound FY data", "climate_compound_fy.csv")
+        download_button(
+            fy_df[["fy", "is_compound", "oni_mean", "enso_phase", "sam_mean", "sam_phase", "dmi_mean", "iod_phase"]],
+            "climate–compound FY data", "climate_compound_fy.csv",
+        )
 
 
 # ── page objects (pre-defined so render_home can call st.switch_page) ─────────
