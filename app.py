@@ -6364,7 +6364,7 @@ A FY with all three simultaneously active is a "loaded dice" scenario.
         .merge(fy_compound, on="fy", how="left")
         .merge(fy_clim,     on="fy", how="left")
     )
-    fy_df["is_compound"] = fy_df["is_compound"].fillna(False).astype(bool)
+    fy_df["is_compound"] = fy_df["is_compound"].astype("boolean").fillna(False).astype(bool)
 
     # Adverse-driver counter: La Niña + Negative SAM + Positive IOD
     fy_df["n_adverse"] = (
