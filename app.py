@@ -2939,7 +2939,7 @@ def _fragment_ica_compound():
             fy_compound.columns = ["fy", "has_compound"]
 
             oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
-            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).astype(bool)
+            oni_merged["has_compound"] = oni_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
             oni_merged["Season"] = oni_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -3000,7 +3000,7 @@ def _fragment_ica_compound():
             sam_fy.columns = ["fy", "mean_sam"]
 
             sam_merged = sam_fy.merge(fy_compound, on="fy", how="left")
-            sam_merged["has_compound"] = sam_merged["has_compound"].fillna(False).astype(bool)
+            sam_merged["has_compound"] = sam_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
             sam_merged["Season"] = sam_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -3059,7 +3059,7 @@ def _fragment_ica_compound():
             iod_fy.columns = ["fy", "mean_dmi"]
 
             iod_merged = iod_fy.merge(fy_compound, on="fy", how="left")
-            iod_merged["has_compound"] = iod_merged["has_compound"].fillna(False).astype(bool)
+            iod_merged["has_compound"] = iod_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
             iod_merged["Season"] = iod_merged["has_compound"].map({
                 True:  "Compound disaster season",
                 False: "No compound disasters",
@@ -3577,7 +3577,7 @@ government response burden.
             oni_fy = oni.groupby("_fy")["oni"].mean().reset_index()
             oni_fy.columns = ["fy", "mean_oni"]
             oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
-            oni_merged["has_compound"] = oni_merged["has_compound"].fillna(False).astype(bool)
+            oni_merged["has_compound"] = oni_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
             oni_merged["Season"] = oni_merged["has_compound"].map({
                 True: "Compound disaster season", False: "No compound disasters",
             })
