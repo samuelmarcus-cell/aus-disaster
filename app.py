@@ -2750,13 +2750,14 @@ def _fragment_ica_compound():
 
         st.plotly_chart(fig_a, width="stretch")
         trend_sig = "no significant trend" if p_val >= 0.05 else "a statistically significant trend"
+        thresh_lbl_esc = thresh_lbl.replace("$", r"\$")
         st.caption(
             f"**{n_comp_yrs} compound disaster year{'s' if n_comp_yrs != 1 else ''}** "
-            f"at the {thresh_lbl} threshold (FY{fy_lo}–FY{fy_hi}). "
-            f"Trend: {trend_sig} (p = {p_val:.2f}); "
-            "Gissing et al. (2022) reported p = 0.79 for FY1967–FY2020 at $100M NL. "
-            "Context strip shows Australian war, pandemic, and recession periods; "
-            "black marker = Newcastle earthquake (1989)."
+            f"at the {thresh_lbl_esc} threshold (FY{fy_lo}–FY{fy_hi}). "
+            f"Trend: {trend_sig} (p = {p_val:.2f}); "
+            "Gissing et al. (2022) reported p = 0.79 for FY1967–FY2020 at A\\$100M NL. "
+            "Context strip: Australian war, pandemic, and recession periods; "
+            "black marker = Newcastle earthquake (1989)."
         )
 
         st.divider()
