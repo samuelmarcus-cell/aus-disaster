@@ -873,6 +873,88 @@ def load_compound_disasters_drfa(window_days: int = 91):
     return ev, clusters
 
 
+@st.cache_data(ttl=3600, show_spinner="Computing FY climate phases…")
+def load_climate_fy_phases() -> pd.DataFrame:
+    """
+    Aggregate ONI, SAM, and IOD monthly data to Australian financial year (FY) level.
+    FY label = start calendar year (FY2000 = 1 Jul 2000 – 30 Jun 2001).
+
+    Returns one row per FY with:
+        fy          – int (start year)
+        oni_mean    – float  (FY mean ONI)
+        enso_phase  – "El Niño" / "La Niña" / "Neutral"
+        sam_mean    – float  (FY mean SAM/AAO)
+        sam_phase   – "Positive SAM" / "Negative SAM" / "Neutral"
+        dmi_mean    – float  (May–Nov active-season mean DMI)
+        iod_phase   – "Positive IOD" / "Negative IOD" / "Neutral"
+    """
+    def _assign_fy(s: pd.Series) -> pd.Series:
+        return s.apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+
+    try:
+        oni = fetch_oni_data()[["date", "month", "oni"]].copy()
+        oni["fy"] = _assign_fy(oni["date"])
+    except Exception:
+        return pd.DataFrame()  # ONI required; bail without it
+
+    try:
+        sam = fetch_sam_data()[["date", "month", "sam"]].copy()
+        sam["fy"] = _assign_fy(sam["date"])
+    except Exception:
+        sam = None
+
+    try:
+        iod = fetch_iod_data()[["date", "month", "dmi"]].copy()
+        iod["fy"] = _assign_fy(iod["date"])
+    except Exception:
+        iod = None
+
+    fy_min = int(oni["fy"].min())
+    fy_max = int(oni["fy"].max())
+
+    # ONI: FY mean (require ≥ 6 months)
+    oni_fy = oni.groupby("fy")["oni"].agg(oni_mean="mean", _n="count").reset_index()
+    oni_fy.loc[oni_fy["_n"] < 6, "oni_mean"] = float("nan")
+    oni_fy["enso_phase"] = "Neutral"
+    oni_fy.loc[oni_fy["oni_mean"] >=  0.5, "enso_phase"] = "El Niño"
+    oni_fy.loc[oni_fy["oni_mean"] <= -0.5, "enso_phase"] = "La Niña"
+    oni_fy.drop(columns="_n", inplace=True)
+
+    fy_df = (
+        pd.DataFrame({"fy": range(fy_min, fy_max + 1)})
+        .merge(oni_fy, on="fy", how="left")
+    )
+
+    # SAM: FY mean (require ≥ 6 months)
+    if sam is not None:
+        sam_fy = sam.groupby("fy")["sam"].agg(sam_mean="mean", _n="count").reset_index()
+        sam_fy.loc[sam_fy["_n"] < 6, "sam_mean"] = float("nan")
+        sam_fy["sam_phase"] = "Neutral"
+        sam_fy.loc[sam_fy["sam_mean"] >=  1.0, "sam_phase"] = "Positive SAM"
+        sam_fy.loc[sam_fy["sam_mean"] <= -1.0, "sam_phase"] = "Negative SAM"
+        sam_fy.drop(columns="_n", inplace=True)
+        fy_df = fy_df.merge(sam_fy, on="fy", how="left")
+    else:
+        fy_df["sam_mean"] = float("nan")
+        fy_df["sam_phase"] = None
+
+    # IOD: May–Nov active-season mean (require ≥ 4 months)
+    if iod is not None:
+        iod_act = iod[iod["month"].isin([5, 6, 7, 8, 9, 10, 11])]
+        iod_fy = iod_act.groupby("fy")["dmi"].agg(dmi_mean="mean", _n="count").reset_index()
+        iod_fy.loc[iod_fy["_n"] < 4, "dmi_mean"] = float("nan")
+        iod_fy["iod_phase"] = "Neutral"
+        iod_fy.loc[iod_fy["dmi_mean"] >=  0.4, "iod_phase"] = "Positive IOD"
+        iod_fy.loc[iod_fy["dmi_mean"] <= -0.4, "iod_phase"] = "Negative IOD"
+        iod_fy.drop(columns="_n", inplace=True)
+        fy_df = fy_df.merge(iod_fy, on="fy", how="left")
+    else:
+        fy_df["dmi_mean"] = float("nan")
+        fy_df["iod_phase"] = None
+
+    return fy_df
+
+
 @st.cache_data(show_spinner=False)
 def load_state_geojson() -> dict | None:
     """Load pre-generated Australian state boundary GeoJSON (dissolved from LGA shapefile)."""
@@ -6216,6 +6298,387 @@ no empirical grounding — the same reason the Capacity Stress Analysis was remo
 
 
 
+def render_climate_linkage():  # noqa: C901
+    """Climate-phase vs compound disaster season linkage analysis."""
+    import numpy as np
+    from plotly.subplots import make_subplots as _msp
+
+    st.title("Climate–Disaster Linkage")
+    st.caption(
+        "Tests whether Australian compound disaster seasons are statistically associated "
+        "with ENSO, SAM, and IOD phases. ICA dataset, FY1967–present."
+    )
+
+    with st.expander("Methodology", expanded=False):
+        st.markdown("""
+**Financial year (FY):** 1 July – 30 June. FY label = start year (FY2000 = Jul 2000 – Jun 2001).
+
+**Compound season:** A FY is *compound* if Gissing et al. (2022) chain-link clustering
+finds ≥ 1 cluster of ≥ 2 ICA events above A\\$100M normalised loss within a 91-day window.
+
+**Phase classification per FY:**
+| Index | Positive phase | Negative phase | Neutral |
+|---|---|---|---|
+| ENSO / ONI | El Niño (FY mean ONI ≥ +0.5 °C) | La Niña (≤ −0.5 °C) | otherwise |
+| SAM / AAO | Positive SAM (FY mean ≥ +1.0) | Negative SAM (≤ −1.0) | otherwise |
+| IOD / DMI | Positive IOD (May–Nov mean DMI ≥ +0.4 °C) | Negative IOD (≤ −0.4 °C) | otherwise |
+
+**Statistical tests:** Chi-squared test of independence (3-phase × 2, df = 2) followed by
+pairwise Fisher's exact tests (each phase vs all others). Requires scipy; raw counts and
+conditional probabilities are shown without p-values if scipy is unavailable.
+
+**"Adverse drivers":** La Niña (floods/cyclones), Negative SAM (east-coast storms), and
+Positive IOD (drought/fire) each independently elevate compound disaster risk.
+A FY with all three simultaneously active is a "loaded dice" scenario.
+        """)
+
+    # ── Load data ─────────────────────────────────────────────────────────────
+    with st.spinner("Computing compound seasons and climate phases…"):
+        try:
+            _, cl_ica = load_compound_disasters(100.0, 91)
+        except Exception as e:
+            st.error(f"Could not load ICA compound data: {e}")
+            return
+        try:
+            fy_clim = load_climate_fy_phases()
+        except Exception as e:
+            st.error(f"Could not load climate phases: {e}")
+            return
+
+    if fy_clim.empty:
+        st.error("ONI data unavailable — climate linkage analysis requires the ONI index.")
+        return
+
+    # Compound flag per FY (True if ≥1 compound cluster that year)
+    fy_compound = (
+        cl_ica.groupby("fy")["_is_compound"]
+        .any()
+        .reset_index()
+        .rename(columns={"_is_compound": "is_compound"})
+    )
+    ica_fy_min = int(cl_ica["fy"].min())
+    ica_fy_max = int(cl_ica["fy"].max())
+
+    fy_df = (
+        pd.DataFrame({"fy": range(ica_fy_min, ica_fy_max + 1)})
+        .merge(fy_compound, on="fy", how="left")
+        .merge(fy_clim,     on="fy", how="left")
+    )
+    fy_df["is_compound"] = fy_df["is_compound"].fillna(False).astype(bool)
+
+    # Adverse-driver counter: La Niña + Negative SAM + Positive IOD
+    fy_df["n_adverse"] = (
+        (fy_df["enso_phase"] == "La Niña").astype(int) +
+        (fy_df["sam_phase"]  == "Negative SAM").astype(int) +
+        (fy_df["iod_phase"]  == "Positive IOD").astype(int)
+    )
+
+    total_fy    = len(fy_df)
+    compound_fy = int(fy_df["is_compound"].sum())
+    base_rate   = compound_fy / total_fy if total_fy > 0 else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Financial years analysed", total_fy)
+    m2.metric("Compound seasons", compound_fy)
+    m3.metric("Base compound rate", f"{base_rate:.0%}")
+    m4.metric("ICA coverage", f"FY{ica_fy_min}–FY{ica_fy_max}")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Contingency Tables", "📈 Timeline", "🎲 Loaded Dice", "📋 Data Table",
+    ])
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+    _PC = {"El Niño": "#d62728", "La Niña": "#1f77b4", "Neutral": "#7f7f7f",
+           "Positive SAM": "#2ca02c", "Negative SAM": "#d62728",
+           "Positive IOD": "#ff7f0e", "Negative IOD": "#1f77b4"}
+
+    def _contingency(phase_col: str, phases: list) -> pd.DataFrame:
+        rows = []
+        for ph in phases:
+            mask = fy_df[phase_col] == ph
+            n_tot = int(mask.sum())
+            n_c   = int((fy_df["is_compound"] & mask).sum())
+            rows.append({
+                "Phase": ph,
+                "Compound FYs":     n_c,
+                "Non-compound FYs": n_tot - n_c,
+                "Total FYs":        n_tot,
+                "P(compound)":      n_c / n_tot if n_tot > 0 else float("nan"),
+            })
+        return pd.DataFrame(rows)
+
+    def _wilson_ci(k: int, n: int, z: float = 1.96) -> tuple:
+        if n == 0:
+            return 0.0, 1.0
+        p      = k / n
+        denom  = 1 + z ** 2 / n
+        centre = (p + z ** 2 / (2 * n)) / denom
+        margin = z * (p * (1 - p) / n + z ** 2 / (4 * n ** 2)) ** 0.5 / denom
+        return max(0.0, centre - margin), min(1.0, centre + margin)
+
+    def _run_tests(cont_df: pd.DataFrame) -> str:
+        try:
+            from scipy.stats import chi2_contingency, fisher_exact
+        except ImportError:
+            return "*(Install scipy for statistical tests.)*"
+        obs = cont_df[["Compound FYs", "Non-compound FYs"]].values.astype(float)
+        if obs.sum() == 0 or (obs == 0).all():
+            return "*(Insufficient data.)*"
+        try:
+            chi2, p_chi2, dof, _ = chi2_contingency(obs)
+        except Exception:
+            return "*(Chi-squared test failed.)*"
+        sig = p_chi2 < 0.05
+        out = (
+            f"**Chi-squared test:** χ²({dof}) = {chi2:.2f}, p = {p_chi2:.3f} "
+            f"{'✓ *significant at α = 0.05*' if sig else '— no significant association at α = 0.05'}"
+            "\n\n**Pairwise Fisher's exact tests (phase vs all other phases):**"
+        )
+        for _, row in cont_df.iterrows():
+            a = int(row["Compound FYs"]);     b = int(row["Non-compound FYs"])
+            c = int(cont_df["Compound FYs"].sum()) - a
+            d = int(cont_df["Non-compound FYs"].sum()) - b
+            if a + b + c + d == 0:
+                continue
+            _, p_f = fisher_exact([[a, b], [c, d]], alternative="two-sided")
+            or_v = (a * d) / (b * c) if b * c > 0 else float("nan")
+            out += f"\n- **{row['Phase']}:** OR = {or_v:.2f}, p = {p_f:.3f}"
+            if p_f < 0.05:
+                out += " ✓"
+        return out
+
+    # ── TAB 1: CONTINGENCY TABLES ─────────────────────────────────────────────
+    with tab1:
+        st.subheader("Compound Season Frequency by Climate Phase")
+        st.caption(
+            f"Base rate: {compound_fy} of {total_fy} financial years ({base_rate:.0%}) "
+            "were compound seasons. Each panel tests whether this rate varies by climate phase."
+        )
+
+        index_specs = [
+            ("ENSO / ONI",  "enso_phase", ["El Niño", "Neutral", "La Niña"],
+             "La Niña drives above-average rainfall over eastern Australia — expected to elevate "
+             "compound flood and cyclone risk."),
+            ("SAM / AAO",   "sam_phase",  ["Positive SAM", "Neutral", "Negative SAM"],
+             "Negative SAM intensifies mid-latitude storm tracks and east-coast rainfall. "
+             "Positive SAM is associated with drier, warmer conditions."),
+            ("IOD / DMI",   "iod_phase",  ["Positive IOD", "Neutral", "Negative IOD"],
+             "Positive IOD suppresses Australian rainfall and drives drought and fire risk. "
+             "Negative IOD increases rainfall. Classified on the May–Nov active-season mean DMI."),
+        ]
+
+        for idx_label, phase_col, phases, note in index_specs:
+            n_valid = int(fy_df[phase_col].notna().sum())
+            with st.expander(f"**{idx_label}** — {n_valid} FYs with phase data", expanded=True):
+                cont_df = _contingency(phase_col, phases)
+                st.caption(note)
+
+                # Conditional probability bar chart + Wilson CIs
+                fig_ct = go.Figure()
+                for _, row in cont_df.iterrows():
+                    ph = row["Phase"]
+                    p  = row["P(compound)"]
+                    lo, hi = _wilson_ci(int(row["Compound FYs"]), int(row["Total FYs"]))
+                    fig_ct.add_bar(
+                        x=[ph], y=[p],
+                        error_y=dict(type="data", symmetric=False,
+                                     array=[hi - p], arrayminus=[p - lo]),
+                        name=ph, marker_color=_PC.get(ph, "#aec7e8"),
+                        text=[f"{p:.0%} ({int(row['Compound FYs'])}/{int(row['Total FYs'])})"],
+                        textposition="outside",
+                    )
+                fig_ct.add_hline(
+                    y=base_rate, line_dash="dash", line_color="black",
+                    annotation_text=f"Base rate {base_rate:.0%}",
+                    annotation_position="top right",
+                )
+                fig_ct.update_layout(
+                    showlegend=False,
+                    yaxis=dict(title="P(compound season)", tickformat=".0%", range=[0, 1.1]),
+                    xaxis_title=idx_label, height=320, margin=dict(t=20, b=10),
+                )
+                st.plotly_chart(fig_ct, width="stretch")
+
+                # Contingency table
+                disp = cont_df.copy()
+                disp["P(compound)"] = disp["P(compound)"].apply(
+                    lambda v: f"{v:.0%}" if pd.notna(v) else "—"
+                )
+                st.dataframe(disp, hide_index=True, width="stretch")
+                st.markdown(_run_tests(cont_df))
+
+    # ── TAB 2: TIMELINE ───────────────────────────────────────────────────────
+    with tab2:
+        st.subheader("Compound Seasons and Climate Phase Timeline")
+        st.caption(
+            "Monthly ONI (top) and FY-mean SAM (bottom). "
+            "Gold stars mark compound disaster seasons (ICA, A\\$100M threshold, 91-day window)."
+        )
+
+        try:
+            oni_monthly = fetch_oni_data()
+            oni_monthly["fy"] = oni_monthly["date"].apply(
+                lambda d: d.year if d.month >= 7 else d.year - 1
+            )
+            oni_monthly = oni_monthly[oni_monthly["fy"] >= ica_fy_min].copy()
+        except Exception:
+            st.warning("Could not load ONI data for timeline.")
+            oni_monthly = pd.DataFrame()
+
+        fig_tl = _msp(
+            rows=2, cols=1,
+            row_heights=[0.72, 0.28],
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+        )
+
+        if not oni_monthly.empty:
+            for phase, colour in [("El Niño", "#d62728"), ("Neutral", "#aec7e8"), ("La Niña", "#1f77b4")]:
+                mask = oni_monthly["enso_phase"] == phase
+                fig_tl.add_scatter(
+                    x=oni_monthly.loc[mask, "date"],
+                    y=oni_monthly.loc[mask, "oni"],
+                    mode="markers", marker=dict(color=colour, size=4, opacity=0.7),
+                    name=phase, legendgroup=phase, row=1, col=1,
+                )
+            fig_tl.add_scatter(
+                x=oni_monthly["date"], y=oni_monthly["oni"],
+                mode="lines", line=dict(color="#888", width=1),
+                name="ONI", showlegend=False, row=1, col=1,
+            )
+            for y_val, colour in [(0.5, "#d62728"), (-0.5, "#1f77b4"), (0, "#ccc")]:
+                fig_tl.add_hline(
+                    y=y_val,
+                    line_dash="dot" if y_val != 0 else "solid",
+                    line_color=colour, line_width=1, row=1, col=1,
+                )
+
+            # Gold star markers for compound seasons
+            comp_fys = fy_df[fy_df["is_compound"]]["fy"].tolist()
+            for i, cfy in enumerate(comp_fys):
+                marker_date = pd.Timestamp(year=int(cfy), month=10, day=1)
+                oni_val = fy_df.loc[fy_df["fy"] == cfy, "oni_mean"]
+                y_star  = float(oni_val.iloc[0]) if len(oni_val) and pd.notna(oni_val.iloc[0]) else 0.0
+                fig_tl.add_scatter(
+                    x=[marker_date], y=[y_star],
+                    mode="markers",
+                    marker=dict(symbol="star", size=14, color="gold",
+                                line=dict(color="darkred", width=1)),
+                    name="Compound season" if i == 0 else "",
+                    showlegend=(i == 0),
+                    legendgroup="compound",
+                    hovertemplate=f"FY{cfy}: compound season<br>ONI mean: {y_star:.2f}<extra></extra>",
+                    row=1, col=1,
+                )
+
+        # SAM FY-mean line in lower panel
+        sam_plot = fy_df[["fy", "sam_mean", "sam_phase"]].dropna(subset=["sam_mean"])
+        if not sam_plot.empty:
+            sam_dates = sam_plot["fy"].apply(lambda y: pd.Timestamp(year=int(y), month=10, day=1))
+            for phase, colour in [("Positive SAM", "#2ca02c"), ("Negative SAM", "#d62728"), ("Neutral", "#aec7e8")]:
+                mask = sam_plot["sam_phase"] == phase
+                if mask.any():
+                    fig_tl.add_scatter(
+                        x=sam_dates[mask], y=sam_plot.loc[mask, "sam_mean"],
+                        mode="markers", marker=dict(color=colour, size=6, opacity=0.8),
+                        name=phase + " (SAM)", legendgroup=phase + "_sam", row=2, col=1,
+                    )
+            fig_tl.add_scatter(
+                x=sam_dates, y=sam_plot["sam_mean"],
+                mode="lines", line=dict(color="#555", width=1),
+                name="SAM (FY mean)", showlegend=False, row=2, col=1,
+            )
+            fig_tl.add_hline(y=0, line_dash="solid", line_color="#ccc", line_width=1, row=2, col=1)
+
+        fig_tl.update_yaxes(title_text="ONI (°C)", row=1, col=1)
+        fig_tl.update_yaxes(title_text="SAM (FY mean)", row=2, col=1)
+        fig_tl.update_xaxes(title_text="Date", row=2, col=1)
+        fig_tl.update_layout(
+            height=540,
+            legend=dict(orientation="h", y=-0.14, font=dict(size=12)),
+        )
+        st.plotly_chart(fig_tl, width="stretch")
+
+    # ── TAB 3: LOADED DICE ────────────────────────────────────────────────────
+    with tab3:
+        st.subheader("Loaded Dice — Simultaneous Adverse Climate Drivers")
+        st.markdown("""
+Three climate drivers are each independently associated with elevated compound disaster risk:
+
+- **La Niña** — elevated rainfall, flood and cyclone activity over eastern Australia
+- **Negative SAM** — intensified mid-latitude storm tracks and east-coast rainfall
+- **Positive IOD** — drought and heat stress, elevated bushfire compound risk
+
+When two or three coincide, the probability of a compound season should increase markedly.
+The chart below shows compound season frequency as a function of how many adverse drivers
+were simultaneously active in each financial year.
+        """)
+
+        valid = fy_df[fy_df[["enso_phase", "sam_phase", "iod_phase"]].notna().all(axis=1)].copy()
+        if valid.empty:
+            st.info("Insufficient data for multi-index analysis (requires ONI, SAM, and IOD).")
+        else:
+            loaded = (
+                valid.groupby("n_adverse")
+                .agg(total=("is_compound", "count"), compound=("is_compound", "sum"))
+                .reset_index()
+            )
+            loaded["P(compound)"] = loaded["compound"] / loaded["total"]
+            loaded["label"] = loaded["n_adverse"].map({
+                0: "0 — No adverse drivers",
+                1: "1 — Single driver",
+                2: "2 — Two drivers",
+                3: "3 — All three",
+            })
+
+            fig_ld = px.bar(
+                loaded, x="label", y="P(compound)",
+                text=loaded.apply(
+                    lambda r: f"{r['P(compound)']:.0%}  ({int(r['compound'])}/{int(r['total'])} FYs)",
+                    axis=1,
+                ),
+                title="Compound Season Rate by Number of Simultaneous Adverse Climate Drivers",
+                labels={"label": "Adverse drivers active simultaneously", "P(compound)": "P(compound season)"},
+                color="n_adverse",
+                color_continuous_scale=["#aec7e8", "#ff7f0e", "#d62728", "#7b0000"],
+            )
+            fig_ld.add_hline(
+                y=base_rate, line_dash="dash", line_color="black",
+                annotation_text=f"Overall base rate {base_rate:.0%}",
+                annotation_position="top right",
+            )
+            fig_ld.update_traces(textposition="outside")
+            fig_ld.update_layout(
+                yaxis=dict(title="P(compound season)", tickformat=".0%", range=[0, 1.15]),
+                coloraxis_showscale=False, height=380,
+            )
+            st.plotly_chart(fig_ld, width="stretch")
+
+            # Table of "loaded" FYs (≥2 adverse drivers)
+            loaded_fys = valid[valid["n_adverse"] >= 2].sort_values("fy")
+            if not loaded_fys.empty:
+                st.markdown("**Financial years with ≥ 2 simultaneous adverse drivers:**")
+                tbl = loaded_fys[["fy", "n_adverse", "enso_phase", "sam_phase", "iod_phase", "is_compound"]].copy()
+                tbl.columns = ["FY", "Adverse drivers", "ENSO", "SAM", "IOD", "Compound season?"]
+                tbl["FY"] = "FY" + tbl["FY"].astype(str)
+                tbl["Compound season?"] = tbl["Compound season?"].map({True: "Yes ★", False: "No"})
+                st.dataframe(tbl, hide_index=True, width="stretch")
+
+    # ── TAB 4: DATA TABLE ─────────────────────────────────────────────────────
+    with tab4:
+        st.subheader("Per-Financial-Year Climate and Compound Season Data")
+        tbl = fy_df[["fy", "is_compound", "oni_mean", "enso_phase",
+                     "sam_mean", "sam_phase", "dmi_mean", "iod_phase", "n_adverse"]].copy()
+        tbl.columns = ["FY", "Compound?", "ONI mean", "ENSO phase",
+                       "SAM mean", "SAM phase", "DMI mean (May–Nov)", "IOD phase", "Adverse drivers"]
+        tbl["FY"] = "FY" + tbl["FY"].astype(str)
+        tbl["Compound?"] = tbl["Compound?"].map({True: "Yes ★", False: "No"})
+        for col in ["ONI mean", "SAM mean", "DMI mean (May–Nov)"]:
+            tbl[col] = tbl[col].round(3)
+        st.dataframe(tbl, hide_index=True, width="stretch")
+        download_button(fy_df, "climate–compound FY data", "climate_compound_fy.csv")
+
+
 # ── page objects (pre-defined so render_home can call st.switch_page) ─────────
 _PAGE_HOME          = st.Page(render_home,                    title="Home",                        icon="🏠", default=True)
 _PAGE_AIDR          = st.Page(render_knowledge_hub,           title="AIDR Event Catalogue",        icon="📋")
@@ -6232,6 +6695,7 @@ _PAGE_DRFA_MERGED   = st.Page(render_drfa_merged,             title="DRFA Activa
 _PAGE_MAP           = st.Page(render_map,                     title="Event Map",                   icon="🗺️")
 _PAGE_COMPOUND_ICA  = st.Page(render_compound_disasters,      title="Compound Disasters (ICA)",    icon="⚡")
 _PAGE_COMPOUND_DRFA = st.Page(render_compound_disasters_drfa, title="Compound Disasters (DRFA)",   icon="🏛️")
+_PAGE_CLIMATE_LINK  = st.Page(render_climate_linkage,         title="Climate–Disaster Linkage",    icon="🌦️")
 _PAGE_EM_CONC       = st.Page(render_research_analysis,       title="EM Concurrency Analysis",     icon="📊")
 _PAGE_STATE_CO      = st.Page(render_state_cooccurrence,      title="State Co-occurrence",         icon="🔁")
 _PAGE_AFAC          = st.Page(render_em_capability,           title="National Capability (AFAC)",  icon="🛡️")
@@ -6252,7 +6716,8 @@ _pg = st.navigation(
             _PAGE_DRFA_MERGED, _PAGE_MAP,
         ],
         "Research Analysis": [
-            _PAGE_COMPOUND_ICA, _PAGE_COMPOUND_DRFA, _PAGE_EM_CONC, _PAGE_STATE_CO,
+            _PAGE_COMPOUND_ICA, _PAGE_COMPOUND_DRFA, _PAGE_CLIMATE_LINK,
+            _PAGE_EM_CONC, _PAGE_STATE_CO,
         ],
         "EM Capacity": [
             _PAGE_AFAC, _PAGE_STATE_CAP,
