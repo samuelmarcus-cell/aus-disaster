@@ -2394,28 +2394,24 @@ def render_drfa_merged():
     with tab_chart:
         c1, c2 = st.columns(2)
         with c1:
-            _TOP_N = 15
-            by_hazard_raw = filt["hazard_type"].value_counts().reset_index()
-            by_hazard_raw.columns = ["Hazard", "Activations"]
-            top = by_hazard_raw.head(_TOP_N).copy()
-            other_sum = by_hazard_raw.iloc[_TOP_N:]["Activations"].sum()
-            if other_sum > 0:
-                top = pd.concat(
-                    [top, pd.DataFrame([{"Hazard": f"Other ({len(by_hazard_raw) - _TOP_N} types)", "Activations": other_sum}])],
-                    ignore_index=True,
-                )
-            top = top.sort_values("Activations", ascending=True)
+            by_hazard = (
+                filt["hazard_group"].value_counts()
+                .reset_index()
+            )
+            by_hazard.columns = ["Hazard Group", "Activations"]
+            by_hazard = by_hazard.sort_values("Activations", ascending=True)
             fig = px.bar(
-                top, x="Activations", y="Hazard", orientation="h",
-                title=f"Activations by Hazard Type (top {_TOP_N} shown)",
+                by_hazard, x="Activations", y="Hazard Group", orientation="h",
+                title="Activations by Hazard Group",
                 color="Activations", color_continuous_scale="Blues",
             )
             fig.update_layout(
                 coloraxis_showscale=False,
                 yaxis_title=None,
-                height=max(340, len(top) * 30),
+                height=max(300, len(by_hazard) * 36),
             )
             st.plotly_chart(fig, width="stretch")
+            st.caption("Hazard group is derived from the primary (first-listed) hazard in the DRFA record. Flood/Cyclone = activations where the primary hazard spans both peril types.")
         with c2:
             paid_by_hazard = (
                 filt[has_payment]
