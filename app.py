@@ -2885,19 +2885,19 @@ def _fragment_ica_compound():
         st.subheader("Compound Disaster Magnitude Scale (Gissing et al. 2022, Table 3)")
         st.caption(
             "Each tier requires **every component event** to individually exceed the loss threshold. "
-            "A cluster of two $1.5B events rates CDMS III — not CDMS I — because each event exceeds $1B."
+            "A cluster of two A\\$1.5B events rates CDMS III — not CDMS I — because each event exceeds A\\$1B."
         )
         st.markdown("""
 | CDMS | # Component Events | Loss threshold per component event (NL) |
 |:---:|:---:|:---|
-| **I** | 2–3 | ≥ $100M each |
-| **II** | > 3 | ≥ $100M each |
-| **III** | 2 | ≥ $1B each |
-| **IV** | > 2 | ≥ $1B each |
-| **V** | 2 | ≥ $5B each |
-| **VI** | > 2 | ≥ $5B each |
-| **VII** | 2 | ≥ $20B each |
-| **VIII** | > 2 | ≥ $20B each |
+| **I** | 2–3 | ≥ A\$100M each |
+| **II** | > 3 | ≥ A\$100M each |
+| **III** | 2 | ≥ A\$1B each |
+| **IV** | > 2 | ≥ A\$1B each |
+| **V** | 2 | ≥ A\$5B each |
+| **VI** | > 2 | ≥ A\$5B each |
+| **VII** | 2 | ≥ A\$20B each |
+| **VIII** | > 2 | ≥ A\$20B each |
         """)
 
         compound_cl = cl[cl["_is_compound"] & cl["_magnitude"].notna()].copy()
@@ -3628,7 +3628,7 @@ government response burden.
         st.subheader("DRFA vs ICA Compound Season Comparison")
         st.caption(
             "Compound financial years identified by DRFA (government response burden) vs ICA "
-            "(insured loss burden, $100M threshold). Overlap = seasons where both datasets "
+            "(insured loss burden, A\\$100M threshold). Overlap = seasons where both datasets "
             "independently identify compound activity. Divergence reveals events captured by one "
             "dataset but not the other — e.g. low-insured but high-government-cost events."
         )
@@ -3786,7 +3786,7 @@ more LGAs activated = more local governments requiring Commonwealth support.
     # ── controls ─────────────────────────────────────────────────────────────
     st.info(
         "**Note on window size:** Gissing et al. use 91 days for the ICA dataset, which has ~5–15 events "
-        "per financial year above the $100M threshold. The DRFA dataset has ~40 events per year, so a "
+        "per financial year above the A\\$100M threshold. The DRFA dataset has ~40 events per year, so a "
         "91-day window chains almost everything into one cluster per year (itself a finding — Australia is in "
         "near-continuous compound disaster response). A shorter window (7–30 days) identifies discrete "
         "**disaster bursts** — periods of concentrated concurrent activation — which is more analytically "
@@ -3829,8 +3829,8 @@ represent escalating levels of external assistance.
 | Dataset | Key figures |
 |---|---|
 | DRFA Activations | 5,967 LGA-event rows · **809 unique events** · 2006–2026 |
-| DRFA Payments | **$6.95 B paid** · $6.96 B granted · only 44 of 809 events have published payment records |
-| ICA Catastrophes | **744 events** · $168.9 B normalised loss (2022 AUD) · 27 pre-2000 2-digit year artefacts corrected |
+| DRFA Payments | **A\$6.95 B paid** · A\$6.96 B granted · only 44 of 809 events have published payment records |
+| ICA Catastrophes | **744 events** · A\$168.9 B normalised loss (2022 AUD) · 27 pre-2000 2-digit year artefacts corrected |
 | AGD Events | **673 events** · 317,945 deaths (includes 29 non-Australian events: shipwrecks, pandemics, wars) |
 | EM-DAT | **224 events** · 2,263 deaths · different inclusion scope to AGD |
 
