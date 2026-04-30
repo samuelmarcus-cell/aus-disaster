@@ -2610,10 +2610,9 @@ def _fragment_ica_compound():
         # ── Context stressors (Australian historical record, FY-based) ───────
         # FY year = calendar year in which 1 July falls (e.g. FY2010 = Jul 2010–Jun 2011)
         _BANDS = [
-            (1962, 1971, "Vietnam",       "War"),
-            (1990, 1990, "Gulf War I",    "War"),
-            (2001, 2012, "Afghanistan",   "War"),
-            (2003, 2009, "Iraq",          "War"),
+            (1962, 1971, "Vietnam",            "War"),
+            (1990, 1990, "Gulf War I",         "War"),
+            (2001, 2012, "Afghanistan/Iraq",   "War"),
             (1968, 1969, "Hong Kong Flu", "Pandemic"),
             (2009, 2009, "Swine Flu",     "Pandemic"),
             (2020, 2022, "COVID-19",      "Pandemic"),
@@ -2752,11 +2751,12 @@ def _fragment_ica_compound():
         st.plotly_chart(fig_a, width="stretch")
         trend_sig = "no significant trend" if p_val >= 0.05 else "a statistically significant trend"
         st.caption(
-            f"**{n_comp_yrs} compound disaster year{'s' if n_comp_yrs != 1 else ''}** at the {thresh_lbl} threshold "
-            f"(FY{fy_lo}–FY{fy_hi}). Linear regression shows {trend_sig} in compound event frequency "
-            f"(p = {p_val:.2f}). Gissing et al. (2022) found p = 0.79 over FY1967–FY2020 at $100M NL. "
-            "Context strip: war, pandemic and recession periods from Australian historical record; "
-            "Newcastle earthquake 1989 shown as black marker."
+            f"**{n_comp_yrs} compound disaster year{'s' if n_comp_yrs != 1 else ''}** "
+            f"at the {thresh_lbl} threshold (FY{fy_lo}–FY{fy_hi}). "
+            f"Trend: {trend_sig} (p = {p_val:.2f}); "
+            "Gissing et al. (2022) reported p = 0.79 for FY1967–FY2020 at $100M NL. "
+            "Context strip shows Australian war, pandemic, and recession periods; "
+            "black marker = Newcastle earthquake (1989)."
         )
 
         st.divider()
@@ -3204,9 +3204,8 @@ def _fragment_drfa_compound():
 
         # ── Context stressors (clipped to DRFA coverage from 2006) ──────────
         _BANDS_D = [
-            (2001, 2012, "Afghanistan", "War"),
-            (2003, 2009, "Iraq",        "War"),
-            (2009, 2009, "Swine Flu",   "Pandemic"),
+            (2001, 2012, "Afghanistan/Iraq", "War"),
+            (2009, 2009, "Swine Flu",        "Pandemic"),
             (2020, 2022, "COVID-19",    "Pandemic"),
             (2020, 2020, "", "Recession"),
         ]
