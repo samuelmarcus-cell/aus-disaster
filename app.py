@@ -2394,10 +2394,11 @@ def render_drfa_merged():
     with tab_chart:
         c1, c2 = st.columns(2)
         with c1:
-            by_hazard = (
-                filt["hazard_group"].value_counts()
-                .reset_index()
+            hazard_grp = (
+                filt["hazard_type"].str.split(",").str[0].str.strip()
+                .map(_DRFA_HAZARD_SIMPLE).fillna("Other")
             )
+            by_hazard = hazard_grp.value_counts().reset_index()
             by_hazard.columns = ["Hazard Group", "Activations"]
             by_hazard = by_hazard.sort_values("Activations", ascending=True)
             fig = px.bar(
