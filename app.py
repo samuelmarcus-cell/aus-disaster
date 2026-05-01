@@ -272,26 +272,61 @@ def to_num_counts(series: pd.Series) -> pd.Series:
     """Strip commas; replace <20 with 10; replace 'nan' with pd.NA; coerce to numeric.
 
     '<20' is a privacy sentinel used in DRFA/Services Australia CSVs to suppress
-    small claim counts.  It is replaced with 10 as a midpoint imputation.
+    small claim counts.  It is replaced with 10 (midpoint imputation, lower bound 1,
+    upper bound 19).  Sensitivity to this choice can be assessed with
+    src.methods.sentinel_strategy.sentinel_sensitivity_table().
+
     Any aggregation (sum, mean) over columns derived from this function should be
     treated as approximate where sentinel values are present.
     """
-    return (
-        series.astype(str)
-        .str.replace(",", "", regex=False)
-        .str.replace("<20", "10", regex=False)  # midpoint imputation of privacy sentinel
-        .replace("nan", pd.NA)
-        .pipe(pd.to_numeric, errors="coerce")
-    )
+    try:
+        from src.methods.sentinel_strategy import apply_sentinel, SentinelStrategy
+        return apply_sentinel(series, SentinelStrategy.MIDPOINT)
+    except ImportError:
+        # Fallback: replicate behaviour inline if src/ is not on path
+        return (
+            series.astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("<20", "10", regex=False)
+            .replace("nan", pd.NA)
+            .pipe(pd.to_numeric, errors="coerce")
+        )
 
 
 def _infer_state_from_name(name: str) -> str:
-    """Extract Australian state/territory from a disaster name string using precompiled rules."""
+    """
+    Extract Australian state/territory from a disaster name string.
+
+    Checks ALL rules and returns the first match (preserving original behaviour).
+    Events matching multiple states are first-match assigned; the companion
+    function _infer_state_confidence() exposes the full match list for auditing.
+
+    Use src/validation/state_inference_audit.py to produce a full audit report.
+    """
     n = str(name)
     for pattern, state in _STATE_RULES:
         if pattern.search(n):
             return state
     return "Unknown"
+
+
+def _infer_state_confidence(name: str) -> tuple[str, list[str]]:
+    """
+    Return (confidence_class, all_matched_states) for a disaster name.
+
+    confidence_class: "EXACT" (1 match) | "MULTI" (>1 match) | "UNKNOWN" (0 matches)
+    all_matched_states: every state whose pattern matched (empty list if UNKNOWN)
+
+    This is a diagnostic companion to _infer_state_from_name() — it does not
+    change the primary state assignment used in downstream analyses.
+    """
+    n = str(name)
+    matches = [state for pattern, state in _STATE_RULES if pattern.search(n)]
+    if len(matches) == 0:
+        return "UNKNOWN", []
+    if len(matches) == 1:
+        return "EXACT", matches
+    return "MULTI", matches
 
 
 
@@ -460,9 +495,17 @@ def load_drfa_payments() -> pd.DataFrame:
         name="DRFA Payments",
     )
     unknown_mask = df["State Name"] == "Unknown"
-    df.loc[unknown_mask, "State Name"] = (
-        df.loc[unknown_mask, "Disaster Name"].apply(_infer_state_from_name)
-    )
+    # Apply inference only to rows whose state is labelled "Unknown" in the source CSV
+    if unknown_mask.any():
+        inferred_names = df.loc[unknown_mask, "Disaster Name"]
+        df.loc[unknown_mask, "State Name"] = inferred_names.apply(_infer_state_from_name)
+        # Attach confidence class so downstream UI can warn on uncertain assignments
+        conf_map = inferred_names.apply(lambda n: _infer_state_confidence(n)[0])
+        df["_state_infer_conf"] = "LABELLED"
+        df.loc[unknown_mask, "_state_infer_conf"] = conf_map.values
+    else:
+        df["_state_infer_conf"] = "LABELLED"
+
     df["_num_paid"] = to_num_dollars(df["Dollars Paid ($)"])
     df["_num_granted"] = to_num_dollars(df["Dollars Granted ($)"])
     df["_num_eligible"] = to_num_counts(df["Eligible Claims (No.)"])
@@ -2008,6 +2051,36 @@ def render_drfa_payments():
 
     df = load_drfa_payments()
 
+    # ── Methodological warnings ───────────────────────────────────────────────
+    if "_state_infer_conf" in df.columns:
+        n_multi   = (df["_state_infer_conf"] == "MULTI").sum()
+        n_unknown = (df["_state_infer_conf"] == "UNKNOWN").sum()
+        n_exact   = (df["_state_infer_conf"] == "EXACT").sum()
+        if n_multi > 0 or n_unknown > 0:
+            with st.expander("⚠️ State inference uncertainty — click to expand", expanded=False):
+                st.markdown(
+                    f"**{n_exact + n_multi + n_unknown}** rows in this dataset had 'Unknown' state labels "
+                    f"in the source CSV and were assigned a state by regex matching on the disaster name.\n\n"
+                    f"| Confidence class | Rows |\n|---|---|\n"
+                    f"| EXACT (single state match) | {n_exact} |\n"
+                    f"| MULTI (matched ≥2 states — first used) | {n_multi} |\n"
+                    f"| UNKNOWN (no pattern matched) | {n_unknown} |\n\n"
+                    "MULTI and UNKNOWN rows may be misclassified. Run "
+                    "`python -m src.validation.state_inference_audit` for a full audit report."
+                )
+
+    # Sentinel value note for claim counts
+    if "_num_eligible" in df.columns:
+        from src.methods.sentinel_strategy import count_sentinels
+        n_sentinel_eligible = count_sentinels(df.get("Eligible Claims (No.)", pd.Series(dtype=str)))
+        if n_sentinel_eligible > 0:
+            st.caption(
+                f"ℹ️ **Sentinel values:** {n_sentinel_eligible} cells in 'Eligible Claims' contain "
+                f"'<20' (privacy-suppressed counts, substituted with 10 as midpoint). "
+                "Claim count totals are approximate. See `src/methods/sentinel_strategy.py` "
+                "for lower/upper bound alternatives."
+            )
+
     col1, col2, col3 = st.columns(3)
     with col1:
         states = sorted(df["State Name"].dropna().unique())
@@ -2264,6 +2337,23 @@ def render_ica():
     source_box(**DATASET_SOURCES["ICA Catastrophes"])
 
     df = load_ica()
+
+    # Sentinel warning: ICA claim counts also use <20 privacy suppression
+    try:
+        from src.methods.sentinel_strategy import count_sentinels
+        _raw_ica = __import__("pandas").read_csv(
+            DATA_DIR / "ICA-Historical-Normalised-Catastrophe-Master-Updated-2026_02.csv",
+            usecols=["TOTAL CLAIMS RECEIVED"],
+            low_memory=False,
+        )
+        n_ica_sentinel = count_sentinels(_raw_ica["TOTAL CLAIMS RECEIVED"])
+        if n_ica_sentinel > 0:
+            st.caption(
+                f"ℹ️ **Sentinel values:** {n_ica_sentinel} ICA events have '<20' claim counts "
+                "(privacy-suppressed, substituted with 10). Claim count totals are approximate."
+            )
+    except Exception:
+        pass
 
     col1, col2, col3 = st.columns(3)
     with col1:
