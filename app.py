@@ -1200,7 +1200,8 @@ def fetch_oni_data() -> pd.DataFrame:
             timeout=15,
         )
         resp.raise_for_status()
-        tables = pd.read_html(resp.text, header=0)
+        from io import StringIO as _StringIO
+        tables = pd.read_html(_StringIO(resp.text), header=0)
 
         oni_raw = None
         for t in tables:
