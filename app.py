@@ -1318,6 +1318,34 @@ def compute_ica_simultaneity() -> pd.DataFrame:
     return df
 
 
+def source_box(name, provider, url, description, coverage, notes=None):
+    with st.expander("Data source", expanded=False):
+        st.markdown(
+            f"**{name}**  \n"
+            f"*Provider:* {provider}  \n"
+            f"*Access:* [{url}]({url})  \n"
+            f"*Coverage:* {coverage}  \n"
+            f"*Description:* {description}"
+        )
+        if notes:
+            st.caption(notes)
+
+
+def download_button(df: pd.DataFrame, label: str, filename: str):
+    csv = fmt_dates(df[raw_cols(df)]).to_csv(index=False).encode("utf-8")
+    st.download_button(f"⬇ Download {label} as CSV", data=csv,
+                       file_name=filename, mime="text/csv")
+
+
+def year_slider(year_series: pd.Series, key: str) -> tuple[int, int]:
+    yr_min = int(year_series.min())
+    yr_max = int(year_series.max())
+    return st.slider("Year range", yr_min, yr_max, (yr_min, yr_max), key=key)
+
+
+# ── page renderers ────────────────────────────────────────────────────────────
+
+
 def render_knowledge_hub():
     st.title("AEMI/AIDR Knowledge Hub — Disasters")
     source_box(**DATASET_SOURCES["Knowledge Hub"])
