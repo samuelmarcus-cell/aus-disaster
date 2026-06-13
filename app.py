@@ -3564,6 +3564,1231 @@ government response burden.
             st.warning(f"Could not load ICA comparison data: {_e}")
 
 
+
+def _fragment_ica_compound():
+    """Fragment: renders the FY-filtered results section of the ICA compound page."""
+    from itertools import combinations as _combos
+    ev_all       = st.session_state["_ica_ev_all"]
+    cl_all       = st.session_state["_ica_cl_all"]
+    fy_min       = st.session_state["_ica_fy_min"]
+    fy_max       = st.session_state["_ica_fy_max"]
+    thresh_lbl   = st.session_state["_ica_thresh_lbl"]
+
+    sel_fy = st.slider("Financial year range", fy_min, fy_max, (fy_min, fy_max), key="cd_fy")
+
+    ev = ev_all[(ev_all["_fy"] >= sel_fy[0]) & (ev_all["_fy"] <= sel_fy[1])].copy()
+    cl = cl_all[(cl_all["fy"] >= sel_fy[0]) & (cl_all["fy"] <= sel_fy[1])].copy()
+
+    n_ev       = len(ev)
+    n_compound = ev["_is_compound"].sum()
+    n_fy_total = cl["fy"].nunique()
+    n_fy_comp  = cl[cl["_is_compound"]]["fy"].nunique()
+    total_nl   = ev["_num_norm_loss"].sum()
+    comp_nl    = ev[ev["_is_compound"]]["_num_norm_loss"].sum()
+    worst_cl   = cl[cl["_is_compound"]].nlargest(1, "n_events")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("ICA events (≥ threshold)", f"{n_ev:,}")
+    m2.metric("In compound clusters",
+              f"{n_compound:,}",
+              delta=f"{100*n_compound/max(n_ev,1):.0f}% of events",
+              delta_color="off")
+    m3.metric("Compound financial years", f"{n_fy_comp} of {n_fy_total}")
+    m4.metric("Largest cluster",
+              f"{int(worst_cl['n_events'].iloc[0])} events" if len(worst_cl) else "—",
+              delta=f"FY{int(worst_cl['fy'].iloc[0])}" if len(worst_cl) else None,
+              delta_color="off")
+    m5.metric("Compound share of NL",
+              f"{100*comp_nl/max(total_nl,1):.0f}%",
+              delta=f"A${comp_nl/1e9:.1f}B of A${total_nl/1e9:.1f}B",
+              delta_color="off")
+
+    t_annual, t_clusters, t_pairs, t_cdms, t_climate = st.tabs([
+        "Annual Overview", "Compound Clusters", "Peril Pairs", "Magnitude Scale", "Climate Drivers",
+    ])
+
+    with t_annual:
+        import numpy as np
+        import math
+        from plotly.subplots import make_subplots as _make_subplots
+
+        # ── Colour palette (consistent with Gissing et al. 2022 Figure 1) ──────
+        _PC = {
+            "Tropical Cyclone": "#2ca02c",
+            "Flood":            "#1f77b4",
+            "Storm":            "#aec7e8",
+            "Bushfire":         "#d62728",
+            "Heatwave":         "#ff7f0e",
+            "Landslide":        "#7f7f7f",
+            "Earthquake":       "#8c564b",
+            "Other":            "#c7c7c7",
+        }
+        _PERIL_ORDER = [
+            "Tropical Cyclone", "Flood", "Storm",
+            "Bushfire", "Heatwave", "Landslide", "Earthquake", "Other",
+        ]
+
+        # ── Data preparation ─────────────────────────────────────────────────
+        fy_all = sorted(ev["_fy"].unique())
+        fy_lo, fy_hi = fy_all[0], fy_all[-1]
+
+        fy_peril_counts = ev.groupby(["_fy", "_peril"]).size().reset_index(name="n")
+
+        fy_comp = (
+            ev[ev["_is_compound"]].groupby("_fy").size()
+            .reindex(fy_all, fill_value=0)
+            .reset_index()
+        )
+        fy_comp.columns = ["_fy", "compound_n"]
+
+        # ── OLS linear trend on compound count (numpy only) ──────────────────
+        x_f = np.array(fy_comp["_fy"].values, dtype=float)
+        y_f = np.array(fy_comp["compound_n"].values, dtype=float)
+        n_f  = len(x_f)
+        xm, ym = x_f.mean(), y_f.mean()
+        SS_xx = float(np.sum((x_f - xm) ** 2))
+        SS_xy = float(np.sum((x_f - xm) * (y_f - ym)))
+        _slope     = SS_xy / SS_xx if SS_xx > 0 else 0.0
+        _intercept = ym - _slope * xm
+        y_trend    = _slope * x_f + _intercept
+        SS_res = float(np.sum((y_f - y_trend) ** 2))
+        if SS_xx > 0 and n_f > 2:
+            se_s  = math.sqrt((SS_res / (n_f - 2)) / SS_xx) if SS_res > 0 else 0.0
+            t_s   = _slope / se_s if se_s > 0 else 0.0
+            df_t  = n_f - 2
+            z_a   = abs(t_s) * (1 - 1 / (4 * df_t))
+            p_val = round(max(0.01, min(0.99, 2 * (1 - 0.5 * (1 + math.erf(z_a / math.sqrt(2)))))), 2)
+        else:
+            p_val = 1.0
+
+        # ── Context stressors (Australian historical record, FY-based) ───────
+        # FY year = calendar year in which 1 July falls (e.g. FY2010 = Jul 2010–Jun 2011)
+        _BANDS = [
+            (1962, 1971, "Vietnam",            "War"),
+            (1990, 1990, "Gulf War I",         "War"),
+            (2001, 2012, "Afghanistan/Iraq",   "War"),
+            (1968, 1969, "Hong Kong Flu", "Pandemic"),
+            (2009, 2009, "Swine Flu",     "Pandemic"),
+            (2020, 2022, "COVID-19",      "Pandemic"),
+            (1974, 1974, "", "Recession"),
+            (1982, 1982, "", "Recession"),
+            (1990, 1990, "", "Recession"),
+            (2020, 2020, "", "Recession"),
+        ]
+        _STRESSOR_Y     = {"War": 3, "Pandemic": 2, "Recession": 1}
+        _STRESSOR_COLOR = {"War": "#8B0000", "Pandemic": "#CC6600", "Recession": "#555555"}
+        _NEWCASTLE_FY   = 1989
+
+        # ── Build figure (main chart + context strip) ─────────────────────────
+        fig_a = _make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.78, 0.22],
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+        )
+
+        # Stacked bars: event count by peril
+        for peril in _PERIL_ORDER:
+            pdata = fy_peril_counts[fy_peril_counts["_peril"] == peril]
+            if pdata.empty:
+                continue
+            fy_vals = pdata.set_index("_fy")["n"].reindex(fy_all, fill_value=0)
+            fig_a.add_trace(go.Bar(
+                x=fy_all,
+                y=fy_vals.values,
+                name=peril,
+                marker_color=_PC.get(peril, "#aaaaaa"),
+                legendgroup=peril,
+                hovertemplate=f"<b>{peril}</b><br>FY%{{x}}: %{{y}} event(s)<extra></extra>",
+            ), row=1, col=1)
+
+        # Compound event count line
+        fig_a.add_trace(go.Scatter(
+            x=fy_comp["_fy"].tolist(),
+            y=fy_comp["compound_n"].tolist(),
+            name="Number of compound events",
+            mode="lines+markers",
+            line=dict(color="black", width=2),
+            marker=dict(size=3, color="black"),
+            hovertemplate="FY%{x}: %{y} compound event(s)<extra></extra>",
+        ), row=1, col=1)
+
+        # OLS trend line on compound count
+        fig_a.add_trace(go.Scatter(
+            x=fy_comp["_fy"].tolist(),
+            y=[round(v, 3) for v in y_trend.tolist()],
+            name=f"Trend in compound events (p = {p_val:.2f})",
+            mode="lines",
+            line=dict(color="black", width=1.5, dash="dot"),
+            hoverinfo="skip",
+        ), row=1, col=1)
+
+        # Context stressor shapes (row 2)
+        for fy_s, fy_e, label, cat in _BANDS:
+            fy_s_c = max(fy_s, fy_lo)
+            fy_e_c = min(fy_e, fy_hi)
+            if fy_s_c > fy_hi or fy_e_c < fy_lo:
+                continue
+            y_pos = _STRESSOR_Y[cat]
+            fig_a.add_shape(
+                type="rect", xref="x", yref="y2",
+                x0=fy_s_c - 0.45, x1=fy_e_c + 0.45,
+                y0=y_pos - 0.38,  y1=y_pos + 0.38,
+                fillcolor=_STRESSOR_COLOR[cat],
+                line=dict(width=0), opacity=0.88,
+            )
+            if label and (fy_e_c - fy_s_c) >= 2:
+                fig_a.add_annotation(
+                    xref="x", yref="y2",
+                    x=(fy_s_c + fy_e_c) / 2, y=y_pos,
+                    text=label, showarrow=False,
+                    font=dict(color="white", size=8, family="Arial"),
+                )
+
+        # Newcastle Earthquake (row 2)
+        if fy_lo <= _NEWCASTLE_FY <= fy_hi:
+            fig_a.add_shape(
+                type="rect", xref="x", yref="y2",
+                x0=_NEWCASTLE_FY - 0.45, x1=_NEWCASTLE_FY + 0.45,
+                y0=0.12, y1=0.88,
+                fillcolor="#222222", line=dict(width=0),
+            )
+
+        # Dummy legend entries for stressors (so they appear in the legend)
+        for cat, color in _STRESSOR_COLOR.items():
+            fig_a.add_trace(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(color=color, size=10, symbol="square"),
+                name=cat, legendgroup=f"ctx_{cat}",
+            ), row=2, col=1)
+        fig_a.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(color="#222222", size=10, symbol="square"),
+            name="Earthquake", legendgroup="ctx_eq",
+        ), row=2, col=1)
+
+        # Layout
+        n_comp_yrs = int((fy_comp["compound_n"] > 0).sum())
+        fig_a.update_layout(
+            barmode="stack",
+            title=dict(
+                text=(
+                    f"ICA Compound Disaster Frequency — Events ≥ {thresh_lbl} NL "
+                    f"· FY{fy_lo}–FY{fy_hi} · Gissing et al. (2022) methodology"
+                ),
+                font=dict(size=13),
+            ),
+            legend=dict(orientation="h", y=-0.12, x=0, xanchor="left", font=dict(size=11)),
+            hovermode="x unified",
+            height=590,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            margin=dict(t=60, b=110),
+        )
+        fig_a.update_yaxes(
+            title_text="Number of ICA Events",
+            row=1, col=1,
+            gridcolor="#eeeeee", showline=True, linecolor="#cccccc",
+            rangemode="nonnegative",
+        )
+        fig_a.update_yaxes(
+            row=2, col=1,
+            tickvals=[1, 2, 3],
+            ticktext=["Recession", "Pandemic", "War"],
+            range=[0, 3.8], showgrid=False, zeroline=False,
+            title_text="Stressor", title_font=dict(size=10),
+            tickfont=dict(size=9),
+        )
+        fig_a.update_xaxes(showgrid=False, row=1, col=1)
+        fig_a.update_xaxes(showgrid=False, row=2, col=1, title_text="Financial Year (July start)")
+
+        st.plotly_chart(fig_a, width="stretch")
+        trend_sig = "no significant trend" if p_val >= 0.05 else "a statistically significant trend"
+        thresh_lbl_esc = thresh_lbl.replace("$", r"\$")
+        st.caption(
+            f"**{n_comp_yrs} compound disaster year{'s' if n_comp_yrs != 1 else ''}** "
+            f"at the {thresh_lbl_esc} threshold (FY{fy_lo}–FY{fy_hi}). "
+            f"Trend: {trend_sig} (p = {p_val:.2f}); "
+            "Gissing et al. (2022) reported p = 0.79 for FY1967–FY2020 at A\\$100M NL. "
+            "Context strip: Australian war, pandemic, and recession periods; "
+            "black marker = Newcastle earthquake (1989)."
+        )
+
+        st.divider()
+
+        # ── Normalised Loss per FY ────────────────────────────────────────────
+        fy_nl = (
+            ev.groupby(["_fy", "_peril"])["_num_norm_loss"]
+            .sum()
+            .reset_index()
+        )
+        fy_nl["NL (A$B)"] = fy_nl["_num_norm_loss"] / 1e9
+
+        compound_fy_set = set(fy_comp[fy_comp["compound_n"] > 0]["_fy"])
+        fy_total_nl = fy_nl.groupby("_fy")["NL (A$B)"].sum()
+        max_nl_val  = float(fy_total_nl.max()) if not fy_total_nl.empty else 1.0
+
+        fig2 = px.bar(
+            fy_nl, x="_fy", y="NL (A$B)", color="_peril",
+            barmode="stack",
+            color_discrete_map=_PC,
+            category_orders={"_peril": _PERIL_ORDER},
+            title=f"Normalised Insurance Loss per Financial Year — by Peril (2022 AUD, ≥ {thresh_lbl})",
+            labels={"_fy": "Financial Year (start)", "_peril": "Peril", "NL (A$B)": "Normalised Loss (A$B)"},
+        )
+        for fy_c in sorted(compound_fy_set):
+            if fy_lo <= fy_c <= fy_hi and fy_c in fy_total_nl.index:
+                fig2.add_annotation(
+                    x=fy_c,
+                    y=float(fy_total_nl.loc[fy_c]) + max_nl_val * 0.025,
+                    text="★", showarrow=False,
+                    font=dict(size=9, color="#222222"),
+                    yanchor="bottom",
+                )
+        fig2.update_layout(
+            legend=dict(orientation="h", y=-0.22),
+            plot_bgcolor="white",
+            yaxis=dict(gridcolor="#eeeeee"),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig2, width="stretch")
+        st.caption("★ = compound disaster year (≥ 2 qualifying events within a 91-day chain-linked window).")
+
+    with t_clusters:
+        st.subheader("Compound disaster clusters (≥ 2 events)")
+        compound_cl = cl[cl["_is_compound"]].copy()
+        if compound_cl.empty:
+            st.info("No compound clusters found at the selected threshold and year range.")
+        else:
+            compound_cl["NL (2022 AUD)"] = compound_cl["total_nl"].apply(
+                lambda x: (f"${x/1e9:.2f}B" if x >= 1e9 else f"${x/1e6:.0f}M") if pd.notna(x) else ""
+            )
+            compound_cl["First Event"] = pd.to_datetime(compound_cl["cluster_start"]).dt.strftime("%d/%m/%Y")
+            display = compound_cl.rename(columns={
+                "fy":         "FY",
+                "n_events":   "# Events",
+                "_magnitude": "CDMS",
+                "perils":     "Perils",
+                "event_names":"Events (first 5)",
+            })[["FY", "First Event", "# Events", "NL (2022 AUD)", "CDMS", "Perils", "Events (first 5)"]]
+            st.dataframe(display.reset_index(drop=True), width="stretch", height=500)
+            csv_cl = compound_cl.drop(columns=["_is_compound"], errors="ignore").to_csv(index=False).encode("utf-8")
+            st.download_button("⬇ Download compound clusters CSV", data=csv_cl,
+                               file_name="compound_clusters.csv", mime="text/csv")
+
+    with t_pairs:
+        st.subheader("Peril co-occurrence in compound clusters")
+        compound_events = ev[ev["_is_compound"]].copy()
+        if compound_events.empty:
+            st.info("No compound events at the selected threshold and year range.")
+        else:
+            peril_pairs = []
+            for _cid, grp in compound_events.groupby("_cluster_id"):
+                perils = sorted(grp["_peril"].dropna().tolist())
+                for a, b in _combos(perils, 2):
+                    peril_pairs.append((min(a, b), max(a, b)))
+
+            if not peril_pairs:
+                st.info("No within-cluster peril pairs found.")
+            else:
+                pairs_df = pd.DataFrame(peril_pairs, columns=["Peril A", "Peril B"])
+                pair_counts = (
+                    pairs_df.groupby(["Peril A", "Peril B"])
+                    .size()
+                    .reset_index(name="Count")
+                )
+                all_perils = sorted(
+                    set(pair_counts["Peril A"].unique()) | set(pair_counts["Peril B"].unique())
+                )
+                matrix = pd.DataFrame(0, index=all_perils, columns=all_perils, dtype=int)
+                for _, row in pair_counts.iterrows():
+                    matrix.at[row["Peril A"], row["Peril B"]] += row["Count"]
+                    matrix.at[row["Peril B"], row["Peril A"]] += row["Count"]
+
+                fig_hm = px.imshow(
+                    matrix, text_auto=True, color_continuous_scale="YlOrRd",
+                    title="Peril Co-occurrence in Compound Clusters (symmetric)",
+                    labels={"color": "Co-occurrences"},
+                )
+                st.plotly_chart(fig_hm, width="stretch")
+
+                pair_counts["Pair"] = pair_counts["Peril A"] + " + " + pair_counts["Peril B"]
+                pair_counts = pair_counts.sort_values("Count", ascending=False)
+                fig_bar = px.bar(
+                    pair_counts, x="Pair", y="Count",
+                    title="Most common peril pairs in compound disasters",
+                    color="Count", color_continuous_scale="YlOrRd",
+                )
+                fig_bar.update_layout(xaxis_tickangle=-30, coloraxis_showscale=False)
+                st.plotly_chart(fig_bar, width="stretch")
+                st.dataframe(pair_counts[["Pair", "Count"]].reset_index(drop=True),
+                             width="stretch", height=300)
+
+    with t_cdms:
+        st.subheader("Compound Disaster Magnitude Scale (Gissing et al. 2022, Table 3)")
+        st.caption(
+            "Each tier requires **every component event** to individually exceed the loss threshold. "
+            "A cluster of two A\\$1.5B events rates CDMS III — not CDMS I — because each event exceeds A\\$1B."
+        )
+        st.markdown("""
+| CDMS | # Component Events | Loss threshold per component event (NL) |
+|:---:|:---:|:---|
+| **I** | 2–3 | ≥ A\\$100M each |
+| **II** | > 3 | ≥ A\\$100M each |
+| **III** | 2 | ≥ A\\$1B each |
+| **IV** | > 2 | ≥ A\\$1B each |
+| **V** | 2 | ≥ A\\$5B each |
+| **VI** | > 2 | ≥ A\\$5B each |
+| **VII** | 2 | ≥ A\\$20B each |
+| **VIII** | > 2 | ≥ A\\$20B each |
+        """)
+
+        compound_cl = cl[cl["_is_compound"] & cl["_magnitude"].notna()].copy()
+        if compound_cl.empty:
+            st.info("No compound clusters with CDMS rating in current selection.")
+        else:
+            _MAG_ORDER = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+            mag_counts = (
+                compound_cl["_magnitude"]
+                .value_counts()
+                .reindex(_MAG_ORDER, fill_value=0)
+                .reset_index()
+            )
+            mag_counts.columns = ["CDMS", "Count"]
+            fig_mag = px.bar(
+                mag_counts, x="CDMS", y="Count",
+                title="Compound Disasters by Magnitude Scale",
+                color="Count", color_continuous_scale="YlOrRd",
+                category_orders={"CDMS": _MAG_ORDER},
+            )
+            fig_mag.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(fig_mag, width="stretch")
+
+            compound_cl["Total NL (A$B)"] = compound_cl["total_nl"] / 1e9
+            fig_sc = px.scatter(
+                compound_cl, x="n_events", y="Total NL (A$B)",
+                color="_magnitude",
+                category_orders={"_magnitude": _MAG_ORDER},
+                hover_data={"fy": True, "perils": True, "event_names": True},
+                labels={
+                    "n_events":   "# Component Events",
+                    "_magnitude": "CDMS",
+                    "fy":         "Financial Year",
+                    "perils":     "Perils",
+                    "event_names":"Events",
+                },
+                title="Compound Clusters — Component Count vs Total NL",
+                size="Total NL (A$B)", size_max=25,
+            )
+            st.plotly_chart(fig_sc, width="stretch")
+
+    with t_climate:
+        st.subheader("ENSO (ONI) and compound disaster seasons")
+        try:
+            oni = fetch_oni_data()
+            oni["_fy"] = oni["date"].apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+            oni_fy = oni.groupby("_fy")["oni"].mean().reset_index()
+            oni_fy.columns = ["fy", "mean_oni"]
+
+            fy_compound = cl.groupby("fy")["_is_compound"].any().reset_index()
+            fy_compound.columns = ["fy", "has_compound"]
+
+            oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
+            oni_merged["has_compound"] = oni_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
+            oni_merged["Season"] = oni_merged["has_compound"].map({
+                True:  "Compound disaster season",
+                False: "No compound disasters",
+            })
+            oni_sel = oni_merged[oni_merged["fy"].between(sel_fy[0], sel_fy[1])]
+
+            _CMAP = {
+                "Compound disaster season": "#d62728",
+                "No compound disasters":    "#1f77b4",
+            }
+            fig_oni = px.bar(
+                oni_sel, x="fy", y="mean_oni", color="Season",
+                color_discrete_map=_CMAP,
+                title="Mean ONI by Financial Year — compound vs non-compound seasons",
+                labels={"fy": "Financial Year (start)", "mean_oni": "Mean ONI (Niño 3.4)"},
+            )
+            fig_oni.add_hline(y=0.5,  line_dash="dot", line_color="orange",    annotation_text="El Niño threshold (+0.5)")
+            fig_oni.add_hline(y=-0.5, line_dash="dot", line_color="steelblue", annotation_text="La Niña threshold (−0.5)")
+            fig_oni.update_layout(legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_oni, width="stretch")
+
+            fig_box = px.box(
+                oni_sel, x="Season", y="mean_oni", color="Season",
+                color_discrete_map=_CMAP, points="all",
+                title="ONI distribution: compound vs non-compound financial years",
+                labels={"mean_oni": "Mean ONI (Jul–Jun)"},
+            )
+            fig_box.add_hline(y=0.5,  line_dash="dot", line_color="orange")
+            fig_box.add_hline(y=-0.5, line_dash="dot", line_color="steelblue")
+            st.plotly_chart(fig_box, width="stretch")
+
+            summary = (
+                oni_sel.groupby("Season")["mean_oni"]
+                .agg(n="count", mean="mean", median="median", std="std")
+                .reset_index()
+                .rename(columns={"n": "N years", "mean": "Mean ONI", "median": "Median ONI", "std": "Std ONI"})
+            )
+            for col in ("Mean ONI", "Median ONI", "Std ONI"):
+                summary[col] = summary[col].round(3)
+            st.dataframe(summary.reset_index(drop=True), width="stretch")
+            st.caption(
+                "Mean ONI computed over the 12 months of each Australian financial year (Jul–Jun). "
+                "Positive ONI → El Niño (drought / fire risk); Negative → La Niña (flood / cyclone risk)."
+            )
+        except Exception as _e:
+            st.warning(f"Could not load ONI data: {_e}")
+
+        st.divider()
+        st.subheader("SAM (Southern Annular Mode) and compound disaster seasons")
+        st.caption(
+            "Positive SAM = enhanced westerlies at 60°S → reduced southern Australian rainfall → elevated fire and drought risk.  \n"
+            "Negative SAM = weakened westerlies at 60°S → enhanced mid-latitude rainfall → elevated flood and cyclone risk in southern Australia."
+        )
+        try:
+            sam = fetch_sam_data()
+            sam["_fy"] = sam["date"].apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+            sam_fy = sam.groupby("_fy")["sam"].mean().reset_index()
+            sam_fy.columns = ["fy", "mean_sam"]
+
+            sam_merged = sam_fy.merge(fy_compound, on="fy", how="left")
+            sam_merged["has_compound"] = sam_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
+            sam_merged["Season"] = sam_merged["has_compound"].map({
+                True:  "Compound disaster season",
+                False: "No compound disasters",
+            })
+            sam_sel = sam_merged[sam_merged["fy"].between(sel_fy[0], sel_fy[1])]
+
+            fig_sam = px.bar(
+                sam_sel, x="fy", y="mean_sam", color="Season",
+                color_discrete_map=_CMAP,
+                title="Mean SAM by Financial Year — compound vs non-compound seasons",
+                labels={"fy": "Financial Year (start)", "mean_sam": "Mean SAM (Marshall index)"},
+            )
+            fig_sam.add_hline(y= 1.0, line_dash="dot", line_color="firebrick",   annotation_text="Positive SAM threshold (+1.0)")
+            fig_sam.add_hline(y=-1.0, line_dash="dot", line_color="steelblue",   annotation_text="Negative SAM threshold (−1.0)")
+            fig_sam.add_hline(y= 0,   line_dash="dash", line_color="grey", line_width=1)
+            fig_sam.update_layout(legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_sam, width="stretch")
+
+            fig_sam_box = px.box(
+                sam_sel, x="Season", y="mean_sam", color="Season",
+                color_discrete_map=_CMAP, points="all",
+                title="SAM distribution: compound vs non-compound financial years",
+                labels={"mean_sam": "Mean SAM (Jul–Jun)"},
+            )
+            fig_sam_box.add_hline(y= 1.0, line_dash="dot", line_color="firebrick")
+            fig_sam_box.add_hline(y=-1.0, line_dash="dot", line_color="steelblue")
+            st.plotly_chart(fig_sam_box, width="stretch")
+
+            sam_summary = (
+                sam_sel.groupby("Season")["mean_sam"]
+                .agg(n="count", mean="mean", median="median", std="std")
+                .reset_index()
+                .rename(columns={"n": "N years", "mean": "Mean SAM", "median": "Median SAM", "std": "Std SAM"})
+            )
+            for col in ("Mean SAM", "Median SAM", "Std SAM"):
+                sam_summary[col] = sam_summary[col].round(3)
+            st.dataframe(sam_summary.reset_index(drop=True), width="stretch")
+            st.caption(
+                "Mean SAM computed over the 12 months of each Australian financial year (Jul–Jun). "
+                "Source: Marshall (2003) SAM index, British Antarctic Survey. Baseline: 1971–2000."
+            )
+        except Exception as _e:
+            st.warning(f"Could not load SAM data: {_e}")
+
+        st.divider()
+        st.subheader("IOD (Dipole Mode Index) and compound disaster seasons")
+        st.caption(
+            "Positive IOD (DMI ≥ +0.4 °C) = warm western / cool eastern Indian Ocean → drought and fire risk in southern/eastern Australia.  \n"
+            "Negative IOD (DMI ≤ −0.4 °C) = cool western / warm eastern Indian Ocean → elevated flood and cyclone risk.  \n"
+            "IOD is most active during austral winter–spring (June–November)."
+        )
+        try:
+            iod = fetch_iod_data()
+            iod["_fy"] = iod["date"].apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+            iod_fy = iod.groupby("_fy")["dmi"].mean().reset_index()
+            iod_fy.columns = ["fy", "mean_dmi"]
+
+            iod_merged = iod_fy.merge(fy_compound, on="fy", how="left")
+            iod_merged["has_compound"] = iod_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
+            iod_merged["Season"] = iod_merged["has_compound"].map({
+                True:  "Compound disaster season",
+                False: "No compound disasters",
+            })
+            iod_sel = iod_merged[iod_merged["fy"].between(sel_fy[0], sel_fy[1])]
+
+            fig_iod = px.bar(
+                iod_sel, x="fy", y="mean_dmi", color="Season",
+                color_discrete_map=_CMAP,
+                title="Mean DMI by Financial Year — compound vs non-compound seasons",
+                labels={"fy": "Financial Year (start)", "mean_dmi": "Mean DMI (°C)"},
+            )
+            fig_iod.add_hline(y= 0.4, line_dash="dot", line_color="firebrick",  annotation_text="pIOD threshold (+0.4 °C)")
+            fig_iod.add_hline(y=-0.4, line_dash="dot", line_color="steelblue",  annotation_text="nIOD threshold (−0.4 °C)")
+            fig_iod.add_hline(y= 0,   line_dash="dash", line_color="grey", line_width=1)
+            fig_iod.update_layout(legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_iod, width="stretch")
+
+            fig_iod_box = px.box(
+                iod_sel, x="Season", y="mean_dmi", color="Season",
+                color_discrete_map=_CMAP, points="all",
+                title="DMI distribution: compound vs non-compound financial years",
+                labels={"mean_dmi": "Mean DMI (°C, Jul–Jun)"},
+            )
+            fig_iod_box.add_hline(y= 0.4, line_dash="dot", line_color="firebrick")
+            fig_iod_box.add_hline(y=-0.4, line_dash="dot", line_color="steelblue")
+            st.plotly_chart(fig_iod_box, width="stretch")
+
+            iod_summary = (
+                iod_sel.groupby("Season")["mean_dmi"]
+                .agg(n="count", mean="mean", median="median", std="std")
+                .reset_index()
+                .rename(columns={"n": "N years", "mean": "Mean DMI", "median": "Median DMI", "std": "Std DMI"})
+            )
+            for col in ("Mean DMI", "Median DMI", "Std DMI"):
+                iod_summary[col] = iod_summary[col].round(3)
+            st.dataframe(iod_summary.reset_index(drop=True), width="stretch")
+            st.caption(
+                "Mean DMI computed over the 12 months of each Australian financial year (Jul–Jun). "
+                "Source: NOAA PSL / HadISST1.1 (Saji & Yamagata 2003). Threshold: ±0.4 °C (BoM standard)."
+            )
+        except Exception as _e:
+            st.warning(f"Could not load IOD data: {_e}")
+
+
+@st.fragment
+def _fragment_drfa_compound():
+    """Fragment: renders the FY-filtered results section of the DRFA compound page."""
+    from itertools import combinations as _combos
+    ev_all = st.session_state["_drfa_ev_all"]
+    cl_all = st.session_state["_drfa_cl_all"]
+    fy_min = st.session_state["_drfa_fy_min"]
+    fy_max = st.session_state["_drfa_fy_max"]
+
+    sel_fy = st.slider("Financial year range", fy_min, fy_max, (fy_min, fy_max), key="drfa_cd_fy")
+
+    ev = ev_all[(ev_all["_fy"] >= sel_fy[0]) & (ev_all["_fy"] <= sel_fy[1])].copy()
+    cl = cl_all[(cl_all["fy"] >= sel_fy[0]) & (cl_all["fy"] <= sel_fy[1])].copy()
+
+    n_ev        = len(ev)
+    n_compound  = ev["_is_compound"].sum()
+    n_fy_total  = cl["fy"].nunique()
+    n_fy_comp   = cl[cl["_is_compound"]]["fy"].nunique()
+    total_lgas  = ev["_lga_count"].sum()
+    comp_lgas   = ev[ev["_is_compound"]]["_lga_count"].sum()
+    worst_cl    = cl[cl["_is_compound"]].nlargest(1, "n_events")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("DRFA events", f"{n_ev:,}")
+    m2.metric("In compound clusters",
+              f"{n_compound:,}",
+              delta=f"{100*n_compound/max(n_ev,1):.0f}% of events",
+              delta_color="off")
+    m3.metric("Compound financial years", f"{n_fy_comp} of {n_fy_total}")
+    m4.metric("Largest cluster",
+              f"{int(worst_cl['n_events'].iloc[0])} events" if len(worst_cl) else "—",
+              delta=f"FY{int(worst_cl['fy'].iloc[0])}" if len(worst_cl) else None,
+              delta_color="off")
+    m5.metric("Compound share of LGA activations",
+              f"{100*comp_lgas/max(total_lgas,1):.0f}%",
+              delta=f"{int(comp_lgas):,} of {int(total_lgas):,} LGA-events",
+              delta_color="off")
+
+    t_annual, t_clusters, t_multistate, t_dgms, t_climate, t_compare = st.tabs([
+        "Annual Overview", "Compound Clusters", "Multi-State Demand",
+        "Magnitude Scale", "Climate Drivers", "ICA Comparison",
+    ])
+
+    with t_annual:
+        import numpy as np
+        import math
+        from plotly.subplots import make_subplots as _make_subplots
+
+        # ── Colour palette (shared with ICA page for cross-page consistency) ──
+        _DPC = {
+            "Tropical Cyclone": "#2ca02c",
+            "Flood":            "#1f77b4",
+            "Storm":            "#aec7e8",
+            "Bushfire":         "#d62728",
+            "Heatwave":         "#ff7f0e",
+            "Landslide":        "#7f7f7f",
+            "Earthquake":       "#8c564b",
+            "Other":            "#c7c7c7",
+        }
+        _DRFA_PERIL_ORDER = [
+            "Tropical Cyclone", "Flood", "Storm",
+            "Bushfire", "Heatwave", "Landslide", "Earthquake", "Other",
+        ]
+
+        # ── Data preparation ─────────────────────────────────────────────────
+        fy_all = sorted(ev["_fy"].unique())
+        fy_lo, fy_hi = fy_all[0], fy_all[-1]
+
+        fy_peril_counts = ev.groupby(["_fy", "_peril"]).size().reset_index(name="n")
+
+        fy_comp = (
+            ev[ev["_is_compound"]].groupby("_fy").size()
+            .reindex(fy_all, fill_value=0)
+            .reset_index()
+        )
+        fy_comp.columns = ["_fy", "compound_n"]
+
+        # ── OLS linear trend on compound count (numpy only) ──────────────────
+        x_f = np.array(fy_comp["_fy"].values, dtype=float)
+        y_f = np.array(fy_comp["compound_n"].values, dtype=float)
+        n_f  = len(x_f)
+        xm, ym = x_f.mean(), y_f.mean()
+        SS_xx = float(np.sum((x_f - xm) ** 2))
+        SS_xy = float(np.sum((x_f - xm) * (y_f - ym)))
+        _slope     = SS_xy / SS_xx if SS_xx > 0 else 0.0
+        _intercept = ym - _slope * xm
+        y_trend    = _slope * x_f + _intercept
+        SS_res = float(np.sum((y_f - y_trend) ** 2))
+        if SS_xx > 0 and n_f > 2:
+            se_s  = math.sqrt((SS_res / (n_f - 2)) / SS_xx) if SS_res > 0 else 0.0
+            t_s   = _slope / se_s if se_s > 0 else 0.0
+            df_t  = n_f - 2
+            z_a   = abs(t_s) * (1 - 1 / (4 * df_t))
+            p_val = round(max(0.01, min(0.99, 2 * (1 - 0.5 * (1 + math.erf(z_a / math.sqrt(2)))))), 2)
+        else:
+            p_val = 1.0
+
+        # ── Context stressors (clipped to DRFA coverage from 2006) ──────────
+        _BANDS_D = [
+            (2001, 2012, "Afghanistan/Iraq", "War"),
+            (2009, 2009, "Swine Flu",        "Pandemic"),
+            (2020, 2022, "COVID-19",    "Pandemic"),
+            (2020, 2020, "", "Recession"),
+        ]
+        _STRESSOR_Y_D     = {"War": 3, "Pandemic": 2, "Recession": 1}
+        _STRESSOR_COLOR_D = {"War": "#8B0000", "Pandemic": "#CC6600", "Recession": "#555555"}
+
+        # ── Build figure (main chart + context strip) ─────────────────────────
+        fig_d = _make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.78, 0.22],
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+        )
+
+        # Stacked bars: DRFA event count by peril
+        for peril in _DRFA_PERIL_ORDER:
+            pdata = fy_peril_counts[fy_peril_counts["_peril"] == peril]
+            if pdata.empty:
+                continue
+            fy_vals = pdata.set_index("_fy")["n"].reindex(fy_all, fill_value=0)
+            fig_d.add_trace(go.Bar(
+                x=fy_all,
+                y=fy_vals.values,
+                name=peril,
+                marker_color=_DPC.get(peril, "#aaaaaa"),
+                legendgroup=peril,
+                hovertemplate=f"<b>{peril}</b><br>FY%{{x}}: %{{y}} DRFA event(s)<extra></extra>",
+            ), row=1, col=1)
+
+        # Compound event count line
+        fig_d.add_trace(go.Scatter(
+            x=fy_comp["_fy"].tolist(),
+            y=fy_comp["compound_n"].tolist(),
+            name="Number of compound events",
+            mode="lines+markers",
+            line=dict(color="black", width=2),
+            marker=dict(size=3, color="black"),
+            hovertemplate="FY%{x}: %{y} compound event(s)<extra></extra>",
+        ), row=1, col=1)
+
+        # OLS trend line
+        fig_d.add_trace(go.Scatter(
+            x=fy_comp["_fy"].tolist(),
+            y=[round(v, 3) for v in y_trend.tolist()],
+            name=f"Trend in compound events (p = {p_val:.2f})",
+            mode="lines",
+            line=dict(color="black", width=1.5, dash="dot"),
+            hoverinfo="skip",
+        ), row=1, col=1)
+
+        # Context stressor shapes (row 2)
+        for fy_s, fy_e, label, cat in _BANDS_D:
+            fy_s_c = max(fy_s, fy_lo)
+            fy_e_c = min(fy_e, fy_hi)
+            if fy_s_c > fy_hi or fy_e_c < fy_lo:
+                continue
+            y_pos = _STRESSOR_Y_D[cat]
+            fig_d.add_shape(
+                type="rect", xref="x", yref="y2",
+                x0=fy_s_c - 0.45, x1=fy_e_c + 0.45,
+                y0=y_pos - 0.38,  y1=y_pos + 0.38,
+                fillcolor=_STRESSOR_COLOR_D[cat],
+                line=dict(width=0), opacity=0.88,
+            )
+            if label and (fy_e_c - fy_s_c) >= 1:
+                fig_d.add_annotation(
+                    xref="x", yref="y2",
+                    x=(fy_s_c + fy_e_c) / 2, y=y_pos,
+                    text=label, showarrow=False,
+                    font=dict(color="white", size=8, family="Arial"),
+                )
+
+        # Dummy legend entries for stressors
+        for cat, color in _STRESSOR_COLOR_D.items():
+            fig_d.add_trace(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(color=color, size=10, symbol="square"),
+                name=cat, legendgroup=f"dctx_{cat}",
+            ), row=2, col=1)
+
+        # Layout
+        n_comp_yrs_d = int((fy_comp["compound_n"] > 0).sum())
+        fig_d.update_layout(
+            barmode="stack",
+            title=dict(
+                text=(
+                    f"DRFA Compound Activation Frequency — Gissing et al. (2022) methodology "
+                    f"· FY{fy_lo}–FY{fy_hi}"
+                ),
+                font=dict(size=13),
+            ),
+            legend=dict(orientation="h", y=-0.12, x=0, xanchor="left", font=dict(size=11)),
+            hovermode="x unified",
+            height=590,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            margin=dict(t=60, b=110),
+        )
+        fig_d.update_yaxes(
+            title_text="Number of DRFA Events",
+            row=1, col=1,
+            gridcolor="#eeeeee", showline=True, linecolor="#cccccc",
+            rangemode="nonnegative",
+        )
+        fig_d.update_yaxes(
+            row=2, col=1,
+            tickvals=[1, 2, 3],
+            ticktext=["Recession", "Pandemic", "War"],
+            range=[0, 3.8], showgrid=False, zeroline=False,
+            title_text="Stressor", title_font=dict(size=10),
+            tickfont=dict(size=9),
+        )
+        fig_d.update_xaxes(showgrid=False, row=1, col=1)
+        fig_d.update_xaxes(showgrid=False, row=2, col=1, title_text="Financial Year (July start)")
+
+        st.plotly_chart(fig_d, width="stretch")
+        trend_sig_d = "no significant trend" if p_val >= 0.05 else "a statistically significant trend"
+        st.caption(
+            f"**{n_comp_yrs_d} compound activation year{'s' if n_comp_yrs_d != 1 else ''}** identified "
+            f"(FY{fy_lo}–FY{fy_hi}). Linear regression shows {trend_sig_d} in compound event frequency "
+            f"(p = {p_val:.2f}). "
+            "Note: DRFA activations reflect government funding decisions, not physical disaster severity. "
+            "Compound years here indicate concurrent Commonwealth funding obligations across multiple declared events."
+        )
+
+        st.divider()
+
+        # ── LGA Activations per FY ────────────────────────────────────────────
+        fy_lga = (
+            ev.groupby(["_fy", "_peril"])["_lga_count"]
+            .sum()
+            .reset_index()
+        )
+        fy_lga.columns = ["_fy", "_peril", "LGA Activations"]
+
+        compound_fy_set_d = set(fy_comp[fy_comp["compound_n"] > 0]["_fy"])
+        fy_total_lga = fy_lga.groupby("_fy")["LGA Activations"].sum()
+        max_lga_val  = float(fy_total_lga.max()) if not fy_total_lga.empty else 1.0
+
+        fig2 = px.bar(
+            fy_lga, x="_fy", y="LGA Activations", color="_peril",
+            barmode="stack",
+            color_discrete_map=_DPC,
+            category_orders={"_peril": _DRFA_PERIL_ORDER},
+            title="Total LGA Activations per Financial Year — by Peril",
+            labels={"_fy": "Financial Year (start)", "_peril": "Peril"},
+        )
+        for fy_c in sorted(compound_fy_set_d):
+            if fy_lo <= fy_c <= fy_hi and fy_c in fy_total_lga.index:
+                fig2.add_annotation(
+                    x=fy_c,
+                    y=float(fy_total_lga.loc[fy_c]) + max_lga_val * 0.025,
+                    text="★", showarrow=False,
+                    font=dict(size=9, color="#222222"),
+                    yanchor="bottom",
+                )
+        fig2.update_layout(
+            legend=dict(orientation="h", y=-0.22),
+            plot_bgcolor="white",
+            yaxis=dict(gridcolor="#eeeeee"),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig2, width="stretch")
+        st.caption("★ = compound activation year (≥ 2 DRFA events within a 91-day chain-linked window). LGA count = number of unique LGA-level activations.")
+
+    with t_clusters:
+        st.subheader("DRFA compound disaster clusters (≥ 2 events)")
+        compound_cl = cl[cl["_is_compound"]].copy()
+        if compound_cl.empty:
+            st.info("No compound clusters found at the selected year range.")
+        else:
+            compound_cl["First Event"] = pd.to_datetime(compound_cl["cluster_start"]).dt.strftime("%d/%m/%Y")
+            display = compound_cl.rename(columns={
+                "fy":          "FY",
+                "n_events":    "# Events",
+                "total_lgas":  "Total LGAs",
+                "_magnitude":  "DGMS",
+                "perils":      "Perils",
+                "states":      "States",
+                "event_names": "Events (first 5)",
+            })[["FY", "First Event", "# Events", "Total LGAs", "DGMS", "Perils", "States", "Events (first 5)"]]
+            st.dataframe(display.reset_index(drop=True), width="stretch", height=500)
+            csv_cl = compound_cl.drop(columns=["_is_compound"], errors="ignore").to_csv(index=False).encode("utf-8")
+            st.download_button("⬇ Download compound clusters CSV", data=csv_cl,
+                               file_name="drfa_compound_clusters.csv", mime="text/csv")
+
+        st.divider()
+        st.subheader("Peril co-occurrence in DRFA compound clusters")
+        compound_events = ev[ev["_is_compound"]].copy()
+        if not compound_events.empty:
+            peril_pairs = []
+            for _cid, grp in compound_events.groupby("_cluster_id"):
+                perils = sorted(grp["_peril"].dropna().tolist())
+                for a, b in _combos(perils, 2):
+                    peril_pairs.append((min(a, b), max(a, b)))
+
+            if peril_pairs:
+                pairs_df = pd.DataFrame(peril_pairs, columns=["Peril A", "Peril B"])
+                pair_counts = (
+                    pairs_df.groupby(["Peril A", "Peril B"])
+                    .size()
+                    .reset_index(name="Count")
+                )
+                all_perils = sorted(
+                    set(pair_counts["Peril A"].unique()) | set(pair_counts["Peril B"].unique())
+                )
+                matrix = pd.DataFrame(0, index=all_perils, columns=all_perils, dtype=int)
+                for _, row in pair_counts.iterrows():
+                    matrix.at[row["Peril A"], row["Peril B"]] += row["Count"]
+                    matrix.at[row["Peril B"], row["Peril A"]] += row["Count"]
+                fig_hm = px.imshow(
+                    matrix, text_auto=True, color_continuous_scale="YlOrRd",
+                    title="Peril Co-occurrence in DRFA Compound Clusters (symmetric)",
+                    labels={"color": "Co-occurrences"},
+                )
+                st.plotly_chart(fig_hm, width="stretch")
+
+    with t_multistate:
+        st.subheader("Cross-jurisdictional simultaneous demand")
+        st.caption(
+            "For each compound cluster, which states were simultaneously responding to active DRFA events? "
+            "This directly measures the simultaneity problem: multiple jurisdictions drawing on Commonwealth "
+            "support capacity at the same time."
+        )
+        compound_cl = cl[cl["_is_compound"]].copy()
+        if compound_cl.empty:
+            st.info("No compound clusters in the selected year range.")
+        else:
+            compound_cl["_state_list"] = compound_cl["states"].apply(
+                lambda s: sorted(s.split("; ")) if pd.notna(s) else []
+            )
+            compound_cl["_n_states"] = compound_cl["_state_list"].apply(len)
+            compound_cl["_multi_state"] = compound_cl["_n_states"] > 1
+
+            n_multi = compound_cl["_multi_state"].sum()
+            n_total = len(compound_cl)
+            st.metric(
+                "Multi-jurisdictional compound clusters",
+                f"{n_multi} of {n_total}",
+                delta=f"{100*n_multi/max(n_total,1):.0f}% of compound clusters",
+                delta_color="off",
+            )
+
+            state_dist = compound_cl["_n_states"].value_counts().sort_index().reset_index()
+            state_dist.columns = ["States Simultaneously Active", "Compound Clusters"]
+            fig_sd = px.bar(
+                state_dist, x="States Simultaneously Active", y="Compound Clusters",
+                title="Number of Jurisdictions Simultaneously Active in Compound Clusters",
+                color="Compound Clusters", color_continuous_scale="YlOrRd",
+            )
+            fig_sd.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(fig_sd, width="stretch")
+
+            state_pairs = []
+            for _, row in compound_cl.iterrows():
+                sl = row["_state_list"]
+                for a, b in _combos(sl, 2):
+                    state_pairs.append((min(a, b), max(a, b)))
+
+            if state_pairs:
+                sp_df = pd.DataFrame(state_pairs, columns=["State A", "State B"])
+                sp_counts = (
+                    sp_df.groupby(["State A", "State B"])
+                    .size()
+                    .reset_index(name="Count")
+                )
+                all_states = sorted(
+                    set(sp_counts["State A"].unique()) | set(sp_counts["State B"].unique())
+                )
+                sp_matrix = pd.DataFrame(0, index=all_states, columns=all_states, dtype=int)
+                for _, row in sp_counts.iterrows():
+                    sp_matrix.at[row["State A"], row["State B"]] += row["Count"]
+                    sp_matrix.at[row["State B"], row["State A"]] += row["Count"]
+                fig_sp = px.imshow(
+                    sp_matrix, text_auto=True, color_continuous_scale="Blues",
+                    title="State/Territory Co-occurrence in Compound DRFA Clusters",
+                    labels={"color": "Co-occurrences"},
+                )
+                st.plotly_chart(fig_sp, width="stretch")
+            else:
+                st.info("No multi-state compound clusters in the selected year range.")
+
+            multi_cl = compound_cl[compound_cl["_multi_state"]].copy()
+            if not multi_cl.empty:
+                multi_cl["cluster_start"] = pd.to_datetime(multi_cl["cluster_start"])
+                multi_cl["First Event"] = multi_cl["cluster_start"].dt.strftime("%d/%m/%Y")
+                display_ms = multi_cl.rename(columns={
+                    "fy":       "FY",
+                    "n_events": "# Events",
+                    "_n_states":"# States",
+                    "states":   "States",
+                    "perils":   "Perils",
+                    "event_names": "Events (first 5)",
+                })[["FY", "First Event", "# Events", "# States", "States", "Perils", "Events (first 5)"]]
+                st.subheader("Multi-jurisdictional compound clusters")
+                st.dataframe(display_ms.reset_index(drop=True), width="stretch", height=400)
+
+    with t_dgms:
+        st.subheader("DRFA Government Magnitude Scale (DGMS)")
+        st.markdown("""
+Adapted from Gissing et al. (2022) Table 3. The normalised loss dimension is replaced by
+**total LGA activations within the cluster** — a direct measure of geographic spread and
+government response burden.
+
+| DGMS | # Component Events | Total Cluster LGA Activations |
+|:---:|---|---|
+| **I** | 2 | < 5 LGAs |
+| **II** | 2 | 5–20 LGAs · *or* · 3 events < 5 LGAs |
+| **III** | 2 | > 20 LGAs · *or* · 3 events 5–20 LGAs · *or* · ≥4 events < 5 LGAs |
+| **IV** | 3 | > 20 LGAs · *or* · ≥4 events 5–20 LGAs |
+| **V** | ≥ 4 | > 20 LGAs |
+
+*Note: DGMS I–V vs Gissing's CDMS I–VIII reflects the narrower LGA-count range relative to the 4-orders-of-magnitude insurance loss scale.*
+        """)
+
+        compound_cl = cl[cl["_is_compound"] & cl["_magnitude"].notna()].copy()
+        if compound_cl.empty:
+            st.info("No compound clusters with DGMS rating in current selection.")
+        else:
+            _MAG_ORDER = ["I", "II", "III", "IV", "V"]
+            mag_counts = (
+                compound_cl["_magnitude"]
+                .value_counts()
+                .reindex(_MAG_ORDER, fill_value=0)
+                .reset_index()
+            )
+            mag_counts.columns = ["DGMS", "Count"]
+            fig_mag = px.bar(
+                mag_counts, x="DGMS", y="Count",
+                title="DRFA Compound Disasters by Magnitude Scale",
+                color="Count", color_continuous_scale="YlOrRd",
+                category_orders={"DGMS": _MAG_ORDER},
+            )
+            fig_mag.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(fig_mag, width="stretch")
+
+            fig_sc = px.scatter(
+                compound_cl, x="n_events", y="total_lgas",
+                color="_magnitude",
+                category_orders={"_magnitude": _MAG_ORDER},
+                hover_data={"fy": True, "perils": True, "states": True, "event_names": True},
+                labels={
+                    "n_events":    "# Component Events",
+                    "total_lgas":  "Total LGA Activations",
+                    "_magnitude":  "DGMS",
+                    "fy":          "Financial Year",
+                    "perils":      "Perils",
+                    "states":      "States",
+                    "event_names": "Events",
+                },
+                title="DRFA Compound Clusters — Component Count vs Total LGA Activations",
+                size="total_lgas", size_max=30,
+            )
+            st.plotly_chart(fig_sc, width="stretch")
+
+    with t_climate:
+        _CMAP = {
+            "Compound disaster season": "#d62728",
+            "No compound disasters":    "#1f77b4",
+        }
+        fy_compound = cl.groupby("fy")["_is_compound"].any().reset_index()
+        fy_compound.columns = ["fy", "has_compound"]
+
+        st.subheader("ENSO (ONI) and DRFA compound disaster seasons")
+        try:
+            oni = fetch_oni_data()
+            oni["_fy"] = oni["date"].apply(lambda d: d.year if d.month >= 7 else d.year - 1)
+            oni_fy = oni.groupby("_fy")["oni"].mean().reset_index()
+            oni_fy.columns = ["fy", "mean_oni"]
+            oni_merged = oni_fy.merge(fy_compound, on="fy", how="left")
+            oni_merged["has_compound"] = oni_merged["has_compound"].astype("boolean").fillna(False).astype(bool)
+            oni_merged["Season"] = oni_merged["has_compound"].map({
+                True: "Compound disaster season", False: "No compound disasters",
+            })
+            oni_sel = oni_merged[oni_merged["fy"].between(sel_fy[0], sel_fy[1])]
+            fig_oni = px.bar(
+                oni_sel, x="fy", y="mean_oni", color="Season",
+                color_discrete_map=_CMAP,
+                title="Mean ONI by Financial Year — DRFA compound vs non-compound seasons",
+                labels={"fy": "Financial Year (start)", "mean_oni": "Mean ONI (Niño 3.4)"},
+            )
+            fig_oni.add_hline(y=0.5,  line_dash="dot", line_color="orange",    annotation_text="El Niño (+0.5)")
+            fig_oni.add_hline(y=-0.5, line_dash="dot", line_color="steelblue", annotation_text="La Niña (−0.5)")
+            fig_oni.update_layout(legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_oni, width="stretch")
+            fig_box = px.box(
+                oni_sel, x="Season", y="mean_oni", color="Season",
+                color_discrete_map=_CMAP, points="all",
+                title="ONI distribution: DRFA compound vs non-compound financial years",
+                labels={"mean_oni": "Mean ONI (Jul–Jun)"},
+            )
+            fig_box.add_hline(y=0.5,  line_dash="dot", line_color="orange")
+            fig_box.add_hline(y=-0.5, line_dash="dot", line_color="steelblue")
+            st.plotly_chart(fig_box, width="stretch")
+            summary = (
+                oni_sel.groupby("Season")["mean_oni"]
+                .agg(n="count", mean="mean", median="median", std="std")
+                .reset_index()
+                .rename(columns={"n": "N years", "mean": "Mean ONI", "median": "Median ONI", "std": "Std ONI"})
+            )
+            for col in ("Mean ONI", "Median ONI", "Std ONI"):
+                summary[col] = summary[col].round(3)
+            st.dataframe(summary.reset_index(drop=True), width="stretch")
+        except Exception as _e:
+            st.warning(f"Could not load ONI data: {_e}")
+
+    with t_compare:
+        st.subheader("DRFA vs ICA Compound Season Comparison")
+        st.caption(
+            "Compound financial years identified by DRFA (government response burden) vs ICA "
+            "(insured loss burden, A\\$100M threshold). Overlap = seasons where both datasets "
+            "independently identify compound activity. Divergence reveals events captured by one "
+            "dataset but not the other — e.g. low-insured but high-government-cost events."
+        )
+        try:
+            _, cl_ica = load_compound_disasters(100.0, 91)
+            drfa_compound_fy = set(cl[cl["_is_compound"]]["fy"].unique())
+            ica_compound_fy  = set(cl_ica[cl_ica["_is_compound"]]["fy"].unique())
+            all_fy_range = range(max(fy_min, 2006), sel_fy[1] + 1)
+            compare_rows = []
+            for fy in all_fy_range:
+                in_drfa = fy in drfa_compound_fy
+                in_ica  = fy in ica_compound_fy
+                if in_drfa and in_ica:
+                    label = "Both"
+                elif in_drfa:
+                    label = "DRFA only"
+                elif in_ica:
+                    label = "ICA only"
+                else:
+                    label = "Neither"
+                compare_rows.append({"FY": fy, "Compound Season": label})
+            comp_df = pd.DataFrame(compare_rows)
+            _COMP_CMAP = {
+                "Both":      "#2ca02c",
+                "DRFA only": "#1f77b4",
+                "ICA only":  "#ff7f0e",
+                "Neither":   "#d3d3d3",
+            }
+            _ORDER = ["Both", "DRFA only", "ICA only", "Neither"]
+            fig_comp = px.bar(
+                comp_df, x="FY", y=[1] * len(comp_df), color="Compound Season",
+                color_discrete_map=_COMP_CMAP,
+                category_orders={"Compound Season": _ORDER},
+                title="Compound Financial Years — DRFA vs ICA (2006 onwards)",
+                labels={"FY": "Financial Year (start)", "y": ""},
+            )
+            fig_comp.update_yaxes(visible=False)
+            fig_comp.update_layout(legend=dict(orientation="h", y=-0.2), bargap=0.1)
+            st.plotly_chart(fig_comp, width="stretch")
+            summary_counts = comp_df["Compound Season"].value_counts().reindex(_ORDER, fill_value=0).reset_index()
+            summary_counts.columns = ["Compound Season", "Financial Years"]
+            st.dataframe(summary_counts, width="stretch", hide_index=True)
+            drfa_only = sorted(drfa_compound_fy - ica_compound_fy)
+            ica_only  = sorted(ica_compound_fy  - drfa_compound_fy)
+            if drfa_only:
+                st.markdown(f"**DRFA-only compound years** (government burden without major insured loss): FY{', FY'.join(str(y) for y in drfa_only)}")
+            if ica_only:
+                st.markdown(f"**ICA-only compound years** (insured loss without DRFA compound activation): FY{', FY'.join(str(y) for y in ica_only)}")
+        except Exception as _e:
+            st.warning(f"Could not load ICA comparison data: {_e}")
+
+
+def render_compound_disasters():  # noqa: C901
+    """Gissing et al. (2022) compound disaster analysis applied to the ICA dataset."""
+    from itertools import combinations as _combos
+
+    st.title("Compound Disaster Analysis")
+    st.caption(
+        "Replicates the Gissing et al. (2022) methodology: two or more ICA catastrophe events "
+        "within a 3-month (91-day) chain-linked window in the same Australian financial year "
+        "(July–June) constitute a compound disaster. Dataset: ICA Historical Normalised Loss."
+    )
+
+    with st.expander("Methodology — Gissing et al. (2022)", expanded=False):
+        st.markdown("""
+**Reference:** Gissing, A., Crompton, R., McAneney, J., & Vidana-Rodriguez, R. (2022).
+Compound natural disasters in Australia: a historical analysis.
+*International Journal of Disaster Risk Reduction*, 72, 102812.
+
+**Steps applied here:**
+1. Filter ICA events to those above the selected normalised loss (NL) threshold (2022 AUD).
+2. Assign each event to an **Australian financial year** (1 July – 30 June).
+3. Within each FY, sort events by start date and apply **chain-link clustering**:
+   if consecutive events start within `window_days` of each other they share a cluster.
+   Any cluster of ≥ 2 events is a **compound disaster**.
+4. Map ICA *Type* to Gissing's six peril categories:
+   Tropical Cyclone · Flood · Storm · Bushfire · Heatwave · Landslide (+ Earthquake / Other).
+5. Classify compound clusters on the **Compound Disaster Magnitude Scale (CDMS)** I–VIII
+   using component count and total NL.
+6. Link compound seasons to ENSO via the Oceanic Niño Index (ONI, NOAA CPC).
+
+**Known limitations:**
+- **Financial year boundary:** The algorithm clusters strictly within each FY (Jul–Jun). A sequence
+  spanning June–July is split into two separate FYs and cannot form a single compound cluster. Verify
+  manually any candidate compound sequence that crosses the July boundary (e.g. 2010–11 QLD floods).
+- **Chain-link transitivity:** Events A → B → C chain together even if A and C are separated by
+  2× `window_days`. The pair-wise gap only needs to be ≤ window between *consecutive* sorted events.
+  Inspect long clusters for whether all members are genuinely co-occurring.
+- **ICA covers insured losses only.** High-income states (NSW, VIC) have systematically higher ICA
+  footprints due to greater insurance penetration and property values, independent of actual event severity.
+
+*Note: ICA data begins 1967; DRFA matching covers 2006 onwards.*
+        """)
+
+    # ── controls ─────────────────────────────────────────────────────────────
+    fc1, fc2 = st.columns(2)
+    with fc1:
+        _THRESH = {"$100M (base)": 100.0, "$500M": 500.0, "$1B": 1000.0, "$5B": 5000.0}
+        sel_thresh_lbl = st.selectbox("Normalised loss threshold", list(_THRESH.keys()), key="cd_thresh")
+        nl_thresh = _THRESH[sel_thresh_lbl]
+    with fc2:
+        window_days = st.slider(
+            "Compound window (days)", 30, 180, 91, step=7,
+            help="Gissing et al. use 91 days (~3 months).", key="cd_window",
+        )
+
+    with st.spinner("Computing compound clusters…"):
+        ev_all, cl_all = load_compound_disasters(nl_thresh, window_days)
+
+    st.session_state["_ica_ev_all"]     = ev_all
+    st.session_state["_ica_cl_all"]     = cl_all
+    st.session_state["_ica_fy_min"]     = int(ev_all["_fy"].min())
+    st.session_state["_ica_fy_max"]     = int(ev_all["_fy"].max())
+    st.session_state["_ica_thresh_lbl"] = sel_thresh_lbl
+    _fragment_ica_compound()
+
+
 def render_oni():  # noqa: C901
     """ENSO / Oceanic Niño Index explorer page."""
     st.title("ENSO — Oceanic Niño Index")
@@ -5263,6 +6488,7 @@ _PAGE_IOD           = st.Page(render_iod,                     title="IOD / DMI",
 _PAGE_MJO           = st.Page(render_mjo,                     title="MJO / RMM",                   icon="🌀")
 _PAGE_CLIMATE_SCI   = st.Page(render_climate_science,         title="Climate Science",             icon="📚")
 _PAGE_DRFA_MERGED   = st.Page(render_drfa_merged,             title="DRFA Activations + Payments", icon="🔀")
+_PAGE_COMPOUND_ICA  = st.Page(render_compound_disasters,      title="Compound Disasters (ICA)",    icon="⚡")
 _PAGE_AFAC          = st.Page(render_em_capability,           title="National Capability (AFAC)",  icon="🛡️")
 _PAGE_STATE_CAP     = st.Page(render_state_capability_profile,title="State Capability Profiles",   icon="📍")
 
@@ -5279,6 +6505,9 @@ _pg = st.navigation(
         ],
         "Integrated Data": [
             _PAGE_DRFA_MERGED,
+        ],
+        "Analysis": [
+            _PAGE_COMPOUND_ICA,
         ],
         "EM Capacity": [
             _PAGE_AFAC, _PAGE_STATE_CAP,
