@@ -1594,121 +1594,6 @@ def year_slider(year_series: pd.Series, key: str) -> tuple[int, int]:
 
 # ── page renderers ────────────────────────────────────────────────────────────
 
-def render_map():
-    st.title("Disaster Event Map")
-    st.caption(
-        "Plots geo-referenced events from the Knowledge Hub (AIDR+AGD merged; ~673 events with coordinates) "
-        "and EM-DAT (23 events with coordinates). Use the controls below to filter."
-    )
-
-    kh = load_knowledge_hub()
-    emdat = load_emdat()
-
-    fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        show_kh = st.checkbox("Knowledge Hub Events", value=True)
-        show_emdat = st.checkbox("EM-DAT Events", value=True)
-    with fc2:
-        combined_years = pd.concat([
-            kh["_num_year"].dropna(),
-            emdat["Start Year"].dropna(),
-        ])
-        sel_years = year_slider(combined_years, key="map_years")
-    with fc3:
-        loc_filter = st.selectbox(
-            "Location scope",
-            ["All", "Australia only", "Outside Australia"],
-        )
-
-    frames = []
-
-    if show_kh:
-        kh_map = kh[
-            (kh["_num_year"] >= sel_years[0]) &
-            (kh["_num_year"] <= sel_years[1]) &
-            kh["lat"].notna() & kh["lon"].notna() &
-            ~((kh["lat"] == 0) & (kh["lon"] == 0)) &
-            kh["lat"].between(-90, 90) &
-            kh["lon"].between(-180, 180)
-        ].copy()
-        if loc_filter == "Australia only":
-            kh_map = kh_map[~kh_map["_states_str"].str.contains("Offshore", na=False)]
-        elif loc_filter == "Outside Australia":
-            kh_map = kh_map[kh_map["_states_str"].str.contains("Offshore", na=False)]
-        kh_map = kh_map.assign(
-            _source="Knowledge Hub",
-            _label=kh_map["Event"],
-            _type=kh_map["Category"],
-            _hover=(
-                "Source: Knowledge Hub<br>"
-                + "Type: " + kh_map["Category"].fillna("") + "<br>"
-                + "Year: " + kh_map["_num_year"].astype("Int64").astype(str) + "<br>"
-                + "Deaths: " + kh_map["_num_fatalities"].fillna(0).astype(int).astype(str)
-            ),
-        )[["lat", "lon", "_source", "_label", "_type", "_hover"]]
-        frames.append(kh_map)
-
-    if show_emdat:
-        emdat_map = emdat.rename(columns={"Latitude": "lat", "Longitude": "lon"}).copy()
-        emdat_map = emdat_map[
-            (emdat_map["Start Year"] >= sel_years[0]) &
-            (emdat_map["Start Year"] <= sel_years[1]) &
-            emdat_map["lat"].notna() & emdat_map["lon"].notna()
-        ]
-        emdat_map = emdat_map.assign(
-            _source="EM-DAT",
-            _label=emdat_map["DisNo."],
-            _type=emdat_map["Disaster Type"],
-            _hover=(
-                "Source: EM-DAT<br>"
-                + "Type: " + emdat_map["Disaster Type"].fillna("") + "<br>"
-                + "Year: " + emdat_map["Start Year"].astype("Int64").astype(str) + "<br>"
-                + "Deaths: " + emdat_map["Total Deaths"].fillna(0).astype(int).astype(str)
-            ),
-        )[["lat", "lon", "_source", "_label", "_type", "_hover"]]
-        frames.append(emdat_map)
-
-    if frames:
-        plot_df = pd.concat(frames, ignore_index=True)
-        st.markdown(f"Showing **{len(plot_df):,} events** ({', '.join(plot_df['_source'].unique())})")
-
-        # Map sampling
-        if len(plot_df) > MAP_SAMPLE_THRESHOLD:
-            show_all = st.checkbox(
-                f"Show all {len(plot_df):,} points (may be slow)",
-                value=False,
-                key="map_show_all",
-            )
-            if not show_all:
-                plot_df = plot_df.sample(MAP_SAMPLE_THRESHOLD, random_state=42)
-
-        fig = px.scatter_map(
-            plot_df,
-            lat="lat", lon="lon",
-            color="_source",
-            hover_name="_label",
-            hover_data={"_hover": True, "lat": False, "lon": False,
-                        "_source": False, "_label": False, "_type": False},
-            labels={"_source": "Dataset"},
-            color_discrete_map={"Knowledge Hub": "#e15759", "EM-DAT": "#4e79a7"},
-            zoom=3, height=620,
-            map_style="open-street-map",
-        )
-        fig.update_traces(marker=dict(size=8, opacity=0.8))
-        fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0}, legend_title_text="Dataset")
-        st.plotly_chart(fig, width="stretch")
-
-        with st.expander("Event list (filtered)"):
-            st.dataframe(
-                plot_df[["_label", "_source", "_type", "lat", "lon"]].rename(columns={
-                    "_label": "Event", "_source": "Dataset", "_type": "Disaster Type"
-                }).reset_index(drop=True),
-                width="stretch", height=300,
-            )
-    else:
-        st.info("Select at least one dataset to display.")
-
-
 def render_knowledge_hub():
     st.title("AEMI/AIDR Knowledge Hub — Disasters")
     source_box(**DATASET_SOURCES["Knowledge Hub"])
@@ -5378,7 +5263,6 @@ _PAGE_IOD           = st.Page(render_iod,                     title="IOD / DMI",
 _PAGE_MJO           = st.Page(render_mjo,                     title="MJO / RMM",                   icon="🌀")
 _PAGE_CLIMATE_SCI   = st.Page(render_climate_science,         title="Climate Science",             icon="📚")
 _PAGE_DRFA_MERGED   = st.Page(render_drfa_merged,             title="DRFA Activations + Payments", icon="🔀")
-_PAGE_MAP           = st.Page(render_map,                     title="Event Map",                   icon="🗺️")
 _PAGE_AFAC          = st.Page(render_em_capability,           title="National Capability (AFAC)",  icon="🛡️")
 _PAGE_STATE_CAP     = st.Page(render_state_capability_profile,title="State Capability Profiles",   icon="📍")
 
@@ -5394,7 +5278,7 @@ _pg = st.navigation(
             _PAGE_ONI, _PAGE_SAM, _PAGE_IOD, _PAGE_MJO, _PAGE_CLIMATE_SCI,
         ],
         "Integrated Data": [
-            _PAGE_DRFA_MERGED, _PAGE_MAP,
+            _PAGE_DRFA_MERGED,
         ],
         "EM Capacity": [
             _PAGE_AFAC, _PAGE_STATE_CAP,
