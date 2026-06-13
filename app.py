@@ -4774,8 +4774,8 @@ Compound natural disasters in Australia: a historical analysis.
         nl_thresh = _THRESH[sel_thresh_lbl]
     with fc2:
         window_days = st.slider(
-            "Compound window (days)", 28, 182, 91, step=7,
-            help="Gissing et al. use 91 days (~3 months).", key="cd_window",
+            "Compound window (days)", 15, 180, 90, step=15,
+            help="Gissing et al. use ~90 days (3 months).", key="cd_window",
         )
 
     with st.spinner("Computing compound clusters…"):
