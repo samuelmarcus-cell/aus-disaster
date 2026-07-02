@@ -2927,7 +2927,7 @@ def render_oni():  # noqa: C901
         st.info(
             "**Literature synthesis:** ENSO explains ~25% of eastern Australian rainfall variability in spring. "
             "La Niña produces stronger, more widespread impacts than El Niño (78.6% vs 56.6% land area affected in SON). "
-            "Impacts are amplified when ENSO aligns with IOD and SAM — see **Climate Science** in the sidebar.",
+            "Impacts are amplified when ENSO aligns with IOD and SAM.",
             icon="📚",
         )
 
@@ -3102,8 +3102,7 @@ def render_sam():  # noqa: C901
         st.info(
             "**Literature synthesis:** SAM explains 10–15% of weekly rainfall variance in southern Australia — "
             "comparable to ENSO. Positive SAM in winter reduces SW/SE Australia rainfall; in summer it increases "
-            "east coast rainfall. SAM has trended positive since the 1970s due to ozone depletion and GHG forcing. "
-            "See **Climate Science** in the sidebar for compound effects with ENSO and IOD.",
+            "east coast rainfall. SAM has trended positive since the 1970s due to ozone depletion and GHG forcing.",
             icon="📚",
         )
 
@@ -3280,8 +3279,7 @@ def render_iod():  # noqa: C901
         st.info(
             "**Literature synthesis:** Every major southern Australian drought since 1889 coincided with "
             "positive or neutral IOD. Extreme positive IOD events are projected to occur ~3× more frequently "
-            "this century. IOD variability is partly energised by ENSO — robust attribution requires care. "
-            "See **Climate Science** in the sidebar for detailed findings and compound effects.",
+            "this century. IOD variability is partly energised by ENSO — robust attribution requires care.",
             icon="📚",
         )
 
@@ -3375,8 +3373,7 @@ def render_mjo():  # noqa: C901
         "[Dao et al. 2025](https://doi.org/10.1002/qj.4995)). "
         "Key signals include: **Phase 3** spring — extreme heat risk doubles over Victoria/Tasmania; "
         "**Phase 7** winter — cold nights double over northeast Queensland; "
-        "**Phases 4–6** — enhanced rainfall and heavy convective events over NE Australia. "
-        "See the **Climate Science** page for detailed phase-by-phase literature findings."
+        "**Phases 4–6** — enhanced rainfall and heavy convective events over NE Australia."
     )
     st.caption(
         "RMM index: [Wheeler & Hendon (2004)](https://doi.org/10.1175/1520-0493(2004)132%3C1917:AARMMI%3E2.0.CO;2) · "
@@ -3838,8 +3835,7 @@ Useful for data validation, exploratory queries, and export.
 
 **🌦 Climate Data**
 Four live climate indices — ENSO/ONI, SAM, IOD/DMI, and MJO/RMM —
-fetched and cached from authoritative sources, plus a Climate Science
-synthesis of compound driver interactions and historical case studies.
+fetched and cached from authoritative sources.
         """)
     with sc2:
         st.markdown("""
@@ -4512,7 +4508,6 @@ _PAGE_ONI           = st.Page(render_oni,                     title="ENSO / ONI"
 _PAGE_SAM           = st.Page(render_sam,                     title="SAM Index",                   icon="🌬️")
 _PAGE_IOD           = st.Page(render_iod,                     title="IOD / DMI",                   icon="🌡️")
 _PAGE_MJO           = st.Page(render_mjo,                     title="MJO / RMM",                   icon="🌀")
-_PAGE_CLIMATE_SCI   = st.Page(render_climate_science,         title="Climate Science",             icon="📚")
 _PAGE_DRFA_MERGED   = st.Page(render_drfa_merged,             title="DRFA Activations + Payments", icon="🔀")
 _PAGE_COMPOUND_ICA  = st.Page(render_compound_disasters,      title="Compound Disasters (ICA)",    icon="⚡")
 _PAGE_AFAC          = st.Page(render_em_capability,           title="National Capability (AFAC)",  icon="🛡️")
@@ -4527,7 +4522,7 @@ _pg = st.navigation(
             _PAGE_AIDR, _PAGE_ICA, _PAGE_DRFA_ACT, _PAGE_DRFA_PAY, _PAGE_EMDAT,
         ],
         "Climate Data": [
-            _PAGE_ONI, _PAGE_SAM, _PAGE_IOD, _PAGE_MJO, _PAGE_CLIMATE_SCI,
+            _PAGE_ONI, _PAGE_SAM, _PAGE_IOD, _PAGE_MJO,
         ],
         "Integrated Data": [
             _PAGE_DRFA_MERGED,
